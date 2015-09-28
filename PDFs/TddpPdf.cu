@@ -286,6 +286,9 @@ __host__ TddpPdf::TddpPdf (std::string n, Variable* _dtime, Variable* _sigmat, V
   , integrators(0)
   , calculators(0) 
 {
+  //Set dtime range for resolution normalisation
+  resolution->setRange(_dtime);
+
   // NB, _dtime already registered!
   registerObservable(_sigmat);
   registerObservable(_m12);
@@ -377,6 +380,9 @@ __host__ TddpPdf::TddpPdf (std::string n, Variable* _dtime, Variable* _sigmat, V
   , integrators(0)
   , calculators(0) 
 {
+  //Set dtime range for resolution normalisation
+  resolution->setRange(_dtime);
+
   // NB, _dtime already registered!
   registerObservable(_sigmat);
   registerObservable(_m12);
@@ -477,6 +483,149 @@ __host__ void TddpPdf::setDataSize (unsigned int dataSize, unsigned int evtSize)
   setForceIntegrals(); 
 }
 
+/*__host__ fptype TddpPdf::normalise_2 () const {
+//__host__ fptype TddpPdf::normalise () const {
+  recursiveSetNormalisation(1); // Not going to normalise efficiency, 
+  // so set normalisation factor to 1 so it doesn't get multiplied by zero. 
+  // Copy at this time to ensure that the SpecialWaveCalculators, which need the efficiency, 
+  // don't get zeroes through multiplying by the normFactor. 
+  MEMCPY_TO_SYMBOL(normalisationFactors, host_normalisation, totalParams*sizeof(fptype), 0, cudaMemcpyHostToDevice); 
+  std::cout << "TDDP normalisation " << getName() << std::endl;
+  int numVars = observables.size(); 
+  if (fitControl->binnedFit()) {
+      numVars += 2;
+      numVars *= -1; 
+  }
+
+  thrust::device_vector<fptype> results(numEntries);  
+  thrust::constant_iterator<int> eventSize(numVars); 
+  thrust::constant_iterator<fptype*> arrayAddress(dev_event_array); 
+  thrust::counting_iterator<int> eventIndex(0); 
+  MetricTaker evalor((PdfBase*)this, getMetricPointer("ptr_to_Prob")); 
+  thrust::transform(thrust::make_zip_iterator(thrust::make_tuple(eventIndex, arrayAddress, eventSize)),
+          thrust::make_zip_iterator(thrust::make_tuple(eventIndex + numEntries, arrayAddress, eventSize)),
+          results.begin(), 
+          evalor); 
+//  std::vector<fptype>  values;
+  fptype  sum = 0;
+  thrust::host_vector<fptype> host_results = results;
+  for (unsigned int i = 0; i < host_results.size(); ++i) {
+      sum += host_results[i];
+  }
+//  std::cout<<"Sum: "<<sum<<std::endl;
+
+  fptype binSizeFactor = 1;
+  Variable* v = *(obsCBegin());
+  binSizeFactor *= ((v->upperlimit - v->lowerlimit) / v->numbins);
+  binSizeFactor *= ((_m12->upperlimit - _m12->lowerlimit) / _m12->numbins);
+  binSizeFactor *= ((_m13->upperlimit - _m13->lowerlimit) / _m13->numbins);
+
+  sum *= binSizeFactor;
+  host_normalisation[parameters] = 1.0/sum;
+
+  return sum;
+}*/
+
+__host__ fptype TddpPdf::getFractions(vector<fptype>&  fracLists) const {
+  fracLists.clear();
+  recursiveSetNormalisation(1); // Not going to normalise efficiency, 
+  // so set normalisation factor to 1 so it doesn't get multiplied by zero. 
+  // Copy at this time to ensure that the SpecialWaveCalculators, which need the efficiency, 
+  // don't get zeroes through multiplying by the normFactor. 
+  MEMCPY_TO_SYMBOL(normalisationFactors, host_normalisation, totalParams*sizeof(fptype), 0, cudaMemcpyHostToDevice); 
+  //std::cout << "TDDP normalisation " << getName() << std::endl;
+
+  int totalBins = _m12->numbins * _m13->numbins;
+  if (!dalitzNormRange) {
+    gooMalloc((void**) &dalitzNormRange, 6*sizeof(fptype));
+  
+    fptype* host_norms = new fptype[6];
+    host_norms[0] = _m12->lowerlimit;
+    host_norms[1] = _m12->upperlimit;
+    host_norms[2] = _m12->numbins;
+    host_norms[3] = _m13->lowerlimit;
+    host_norms[4] = _m13->upperlimit;
+    host_norms[5] = _m13->numbins;
+    MEMCPY(dalitzNormRange, host_norms, 6*sizeof(fptype), cudaMemcpyHostToDevice);
+    delete[] host_norms; 
+  }
+
+  for (unsigned int i = 0; i < decayInfo->resonances.size(); ++i) {
+    redoIntegral[i] = forceRedoIntegrals; 
+    if (!(decayInfo->resonances[i]->parametersChanged())) continue;
+    redoIntegral[i] = true; 
+    decayInfo->resonances[i]->storeParameters();
+  }
+  forceRedoIntegrals = false; 
+
+  // Only do this bit if masses or widths have changed.  
+  thrust::constant_iterator<fptype*> arrayAddress(dalitzNormRange); 
+  thrust::counting_iterator<int> binIndex(0); 
+
+  // NB, SpecialWaveCalculator assumes that fit is unbinned! 
+  // And it needs to know the total event size, not just observables
+  // for this particular PDF component. 
+  thrust::constant_iterator<fptype*> dataArray(dev_event_array); 
+  thrust::constant_iterator<int> eventSize(totalEventSize);
+  thrust::counting_iterator<int> eventIndex(0); 
+
+  static int normCall = 0; 
+  normCall++; 
+
+  for (int i = 0; i < decayInfo->resonances.size(); ++i) {
+    if (redoIntegral[i]) {
+      
+      thrust::transform(thrust::make_zip_iterator(thrust::make_tuple(eventIndex, dataArray, eventSize)),
+			thrust::make_zip_iterator(thrust::make_tuple(eventIndex + numEntries, arrayAddress, eventSize)),
+			strided_range<thrust::device_vector<WaveHolder>::iterator>(cachedWaves->begin() + i, cachedWaves->end(), decayInfo->resonances.size()).begin(), 
+			*(calculators[i]));
+      //std::cout << "Integral for resonance " << i << " " << numEntries << " " << totalEventSize << std::endl; 
+    }
+    
+    // Possibly this can be done more efficiently by exploiting symmetry? 
+    for (int j = 0; j < decayInfo->resonances.size(); ++j) {
+      if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
+      ThreeComplex dummy(0, 0, 0, 0, 0, 0);
+      SpecialComplexSum complexSum; 
+      (*(integrals[i][j])) = thrust::transform_reduce(thrust::make_zip_iterator(thrust::make_tuple(binIndex, arrayAddress)),
+						      thrust::make_zip_iterator(thrust::make_tuple(binIndex + totalBins, arrayAddress)),
+						      *(integrators[i][j]), 
+						      dummy, 
+						      complexSum); 
+    }
+  }      
+
+  // End of time-consuming integrals. 
+
+  complex<fptype> integralA_2(0, 0);
+  const unsigned int nres = decayInfo->resonances.size();
+  fptype matdiag[nres]; 
+  complex<fptype> phi_rhoppim(0,0);
+  complex<fptype> phi_rhozpiz(0,0);
+  complex<fptype> phi_rhompip(0,0);
+  complex<fptype> phi_f0pi0(0,0);
+  complex<fptype> phi_nonres(0,0);
+  for (unsigned int i = 0; i < nres; ++i) {
+    int param_i = parameters + resonanceOffset + resonanceSize*i; 
+    complex<fptype> amplitude_i(host_params[host_indices[param_i]], host_params[host_indices[param_i + 1]]);
+    std::string resname = decayInfo->resonances[i]->getName();
+//    if (resname.find("nonr")==0) phi_nonres = amplitude_i*;
+
+    for (unsigned int j = 0; j < nres; ++j) {
+      int param_j = parameters + resonanceOffset + resonanceSize*j; 
+      complex<fptype> amplitude_j(host_params[host_indices[param_j]], -host_params[host_indices[param_j + 1]]); // Notice complex conjugation
+
+      integralA_2 += (amplitude_i * amplitude_j * complex<fptype>(thrust::get<0>(*(integrals[i][j])), thrust::get<1>(*(integrals[i][j])))); 
+      if (i ==j) matdiag[i] = real(amplitude_i * amplitude_j * complex<fptype>(thrust::get<0>(*(integrals[i][j])), thrust::get<1>(*(integrals[i][j]))));
+    }
+  }
+  for (unsigned int i = 0; i < decayInfo->resonances.size(); ++i) {
+      std::cout << "Integral contribution for res # " << i << ": "<< matdiag[i] / real(integralA_2) << std::endl;
+      fracLists.push_back(matdiag[i] / real(integralA_2));
+  }
+  return real(integralA_2);
+}
+
 __host__ fptype TddpPdf::normalise () const {
   recursiveSetNormalisation(1); // Not going to normalise efficiency, 
   // so set normalisation factor to 1 so it doesn't get multiplied by zero. 
@@ -559,43 +708,51 @@ __host__ fptype TddpPdf::normalise () const {
   complex<fptype> integralA_2(0, 0);
   complex<fptype> integralB_2(0, 0);
   complex<fptype> integralABs(0, 0);
-  for (unsigned int i = 0; i < decayInfo->resonances.size(); ++i) {
+  const unsigned int nres = decayInfo->resonances.size();
+  fptype matdiag[nres]; 
+  for (unsigned int i = 0; i < nres; ++i) {
     int param_i = parameters + resonanceOffset + resonanceSize*i; 
     complex<fptype> amplitude_i(host_params[host_indices[param_i]], host_params[host_indices[param_i + 1]]);
 
-    for (unsigned int j = 0; j < decayInfo->resonances.size(); ++j) {
+    for (unsigned int j = 0; j < nres; ++j) {
       int param_j = parameters + resonanceOffset + resonanceSize*j; 
       complex<fptype> amplitude_j(host_params[host_indices[param_j]], -host_params[host_indices[param_j + 1]]); // Notice complex conjugation
 
       integralA_2 += (amplitude_i * amplitude_j * complex<fptype>(thrust::get<0>(*(integrals[i][j])), thrust::get<1>(*(integrals[i][j])))); 
       integralABs += (amplitude_i * amplitude_j * complex<fptype>(thrust::get<2>(*(integrals[i][j])), thrust::get<3>(*(integrals[i][j]))));
       integralB_2 += (amplitude_i * amplitude_j * complex<fptype>(thrust::get<4>(*(integrals[i][j])), thrust::get<5>(*(integrals[i][j]))));
+      if (i ==j) matdiag[i] = real(amplitude_i * amplitude_j * complex<fptype>(thrust::get<0>(*(integrals[i][j])), thrust::get<1>(*(integrals[i][j]))));
 
       /*
       if (cpuDebug & 1) {
 	int idx = i * decayInfo->resonances.size() + j;     
 	if (0 == host_callnumber) std::cout << "Integral contribution " << i << ", " << j << " " << idx << " : "
 					    << amplitude_i << " "
-					    << amplitude_j << " (" 
-					    << real(amplitude_i * amplitude_j * complex<fptype>(thrust::get<0>(*(integrals[i][j])), thrust::get<1>(*(integrals[i][j])))) << ", "
+					    << amplitude_j << " (" */
+/*					    << real(amplitude_i * amplitude_j * complex<fptype>(thrust::get<0>(*(integrals[i][j])), thrust::get<1>(*(integrals[i][j])))) << ", "
 					    << imag(amplitude_i * amplitude_j * complex<fptype>(thrust::get<0>(*(integrals[i][j])), thrust::get<1>(*(integrals[i][j])))) << ") ("
 					    << real(amplitude_i * amplitude_j * complex<fptype>(thrust::get<2>(*(integrals[i][j])), thrust::get<3>(*(integrals[i][j])))) << ", "
 					    << imag(amplitude_i * amplitude_j * complex<fptype>(thrust::get<2>(*(integrals[i][j])), thrust::get<3>(*(integrals[i][j])))) << ") ("
 					    << real(amplitude_i * amplitude_j * complex<fptype>(thrust::get<4>(*(integrals[i][j])), thrust::get<5>(*(integrals[i][j])))) << ", "
-					    << imag(amplitude_i * amplitude_j * complex<fptype>(thrust::get<4>(*(integrals[i][j])), thrust::get<5>(*(integrals[i][j])))) << ") "
+					    << imag(amplitude_i * amplitude_j * complex<fptype>(thrust::get<4>(*(integrals[i][j])), thrust::get<5>(*(integrals[i][j])))) << ") ("
 					    << thrust::get<0>(*(integrals[i][j])) << ", "
 					    << thrust::get<1>(*(integrals[i][j])) << ") ("
 					    << thrust::get<2>(*(integrals[i][j])) << ", "
 					    << thrust::get<3>(*(integrals[i][j])) << ") ("
 					    << thrust::get<4>(*(integrals[i][j])) << ", "
-					    << thrust::get<5>(*(integrals[i][j])) << ") ("
-					    << real(integralA_2) << ", " << imag(integralA_2) << ") "
+					    << thrust::get<5>(*(integrals[i][j])) << ") ("*/
+/*					    << real(integralA_2) << ", " << imag(integralA_2) << ") "
 					    << std::endl; 
       }
       */
 
     }
   }
+/*  if (0 == host_callnumber) {
+  for (unsigned int i = 0; i < decayInfo->resonances.size(); ++i) {
+      std::cout << "Integral contribution for res # " << i << ": "<< matdiag[i] / real(integralA_2) << std::endl;
+  }
+  }*/
 
   double dalitzIntegralOne = real(integralA_2); // Notice that this is already the abs2, so it's real by construction; but the compiler doesn't know that. 
   double dalitzIntegralTwo = real(integralB_2);
@@ -624,9 +781,9 @@ __host__ fptype TddpPdf::normalise () const {
 	    << ret << " " 
 	    << std::endl; 
 #endif
-    
+  
   host_normalisation[parameters] = 1.0/ret;
-  //std::cout << "End of TDDP normalisation: " << ret << " " << host_normalisation[parameters] << " " << binSizeFactor << std::endl; 
+//  std::cout << "End of TDDP normalisation: " << ret << " " << host_normalisation[parameters] << " " << binSizeFactor << std::endl; 
   return (fptype) ret; 
 }
 //#endif 

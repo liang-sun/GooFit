@@ -1,19 +1,17 @@
 #------------------------------------------------------------------------------
-ifeq ($(TARGET_MIC),)
 CXX=nvcc
-LD=g++
-else
-# Intel Xeon Phi/MIC requires using Intel C++ Compiler (ICC)
-CXX=icpc
-LD=icpc
-CXXFLAGS=-mmic -x c++
-endif
+LD=g++ 
+OutPutOpt = -o
 
-CXXFLAGS += -O3
-DEFINEFLAGS = -DDUMMY=dummy 
+#CUDAPRINT=1
+
+CXXFLAGS     = -O3
+DEFINEFLAGS=-DDUMMY=dummy 
+CUDALIBDIR=lib64
 
 UNAME=$(shell uname)
 ifeq ($(UNAME), Darwin)
+CUDALIBDIR=lib
 CXXFLAGS+=-m64
 endif
 
@@ -30,18 +28,10 @@ DEFINEFLAGS += -DPROFILING=yes
 endif 
 
 ifeq ($(TARGET_OMP),)
-# nvcc (CUDA)
 CXXFLAGS += -arch=sm_20
 else
-# OpenMP common flags
-DEFINEFLAGS += -fno-inline -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_BACKEND_OMP
-ifeq ($(TARGET_MIC),)
-# GCC/Clang
-DEFINEFLAGS += -fopenmp
-else
-# Intel C++ Compiler (ICC)
-DEFINEFLAGS += -openmp
-endif
+DEFINEFLAGS += -fno-inline -fopenmp -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_BACKEND_OMP
+LIBS += -lgomp
 endif 
 
 ifeq ($(CUDALOCATION), )
@@ -53,6 +43,7 @@ PWD = $(shell /bin/pwd)
 SRCDIR = $(PWD)/PDFs
 
 INCLUDES += -I$(SRCDIR) -I$(PWD) -I$(CUDAHEADERS) -I$(PWD)/rootstuff 
+LIBS += -L$(CUDALOCATION)/$(CUDALIBDIR) -lcudart -L$(PWD)/rootstuff -lRootUtils 
 
 # GooPdf must be first in CUDAglob, as it defines global variables.
 FUNCTORLIST    = $(SRCDIR)/GooPdf.cu 
@@ -64,7 +55,7 @@ WRKFUNCTORLIST = $(patsubst $(SRCDIR)/%.cu,wrkdir/%.cu,$(FUNCTORLIST))
 
 THRUSTO		= wrkdir/Variable.o wrkdir/FitManager.o wrkdir/GooPdfCUDA.o wrkdir/Faddeeva.o wrkdir/FitControl.o wrkdir/PdfBase.o wrkdir/DataSet.o wrkdir/BinnedDataSet.o wrkdir/UnbinnedDataSet.o wrkdir/FunctorWriter.o 
 ROOTRIPDIR	= $(PWD)/rootstuff
-ROOTRIPOBJS	= $(ROOTRIPDIR)/TMinuit.o $(ROOTRIPDIR)/TRandom.o $(ROOTRIPDIR)/TRandom3.o 
+ROOTRIPOBJS	= $(ROOTRIPDIR)/TMinuit.o $(ROOTRIPDIR)/TRandom.o $(ROOTRIPDIR)/TRandom3.o $(ROOTRIPDIR)/TRandom2.o
 ROOTUTILLIB	= $(ROOTRIPDIR)/libRootUtils.so 
 
 .SUFFIXES: 

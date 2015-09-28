@@ -5,7 +5,7 @@
 
 class ThreeGaussResolution : public MixingTimeResolution {
 public: 
-  ThreeGaussResolution (Variable* cf, Variable* tf, Variable* cb, Variable* cs, Variable* tb, Variable* ts, Variable* ob, Variable* os); 
+  ThreeGaussResolution (Variable* cf, Variable* tf, Variable* cb, Variable* cs, Variable* tb, Variable* ts, Variable* ob, Variable* os, Variable* ovas = NULL); 
   ~ThreeGaussResolution ();
 
   virtual fptype normalisation (fptype di1, fptype di2, fptype di3, fptype di4, fptype tau, fptype xmixing, fptype ymixing) const;
@@ -20,6 +20,8 @@ private:
   Variable* tailScaleFactor;
   Variable* outBias;
   Variable* outScaleFactor;
+  Variable* overallScale;
+
 }; 
 
 #endif 

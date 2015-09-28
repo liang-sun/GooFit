@@ -36,6 +36,7 @@ void FitManager::getMinuitValues () const {
     (*i)->error = fitter->GetParError(counter);
     counter++;
   }
+  std::cout<<"Cov mat test: "<<fitter->GetCovarianceMatrix()[0]<<'\t'<<fitter->GetCovarianceMatrix()[1]<<std::endl;
 }
 
 void FitFun (int &npar, double *gin, double &fun, double *fp, int iflag) { // MINUIT 3 version 

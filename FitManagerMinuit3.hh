@@ -4,6 +4,10 @@
 #include "TVirtualFitter.h" 
 extern PdfBase* pdfPointer; 
 extern int numPars; 
+#ifdef OMP_ON
+#pragma omp threadprivate (numPars)
+#pragma omp threadprivate (pdfPointer)
+#endif
 void FitFun (int &npar, double *gin, double &fun, double *fp, int iflag); 
 
 class FitManager {

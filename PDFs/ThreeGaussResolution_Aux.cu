@@ -64,6 +64,10 @@ EXEC_TARGET fptype device_threegauss_resolution (fptype coshterm, fptype costerm
   fptype tailScaleFactor = p[indices[6]];
   fptype outlBias        = p[indices[7]];
   fptype outlScaleFactor = p[indices[8]];
+  fptype overallScale    = p[indices[9]];
+  coreScaleFactor       *= overallScale;
+  tailScaleFactor       *= overallScale;
+  outlScaleFactor       *= overallScale;
 
   fptype cp1 = 0;
   fptype cp2 = 0;
@@ -98,7 +102,7 @@ EXEC_TARGET fptype device_threegauss_resolution (fptype coshterm, fptype costerm
 
 MEM_DEVICE device_resfunction_ptr ptr_to_threegauss = device_threegauss_resolution; 
 
-ThreeGaussResolution::ThreeGaussResolution (Variable* cf, Variable* tf, Variable* cb, Variable* cs, Variable* tb, Variable* ts, Variable* ob, Variable* os) 
+ThreeGaussResolution::ThreeGaussResolution (Variable* cf, Variable* tf, Variable* cb, Variable* cs, Variable* tb, Variable* ts, Variable* ob, Variable* os, Variable* ovas) 
   : MixingTimeResolution()
   , coreFraction(cf)
   , tailFraction(tf)
@@ -108,14 +112,16 @@ ThreeGaussResolution::ThreeGaussResolution (Variable* cf, Variable* tf, Variable
   , tailScaleFactor(ts)
   , outBias(ob)
   , outScaleFactor(os)
+  , overallScale(ovas)
 {
+  if (overallScale == NULL) overallScale = new Variable("constantOne", 1);
   GET_FUNCTION_ADDR(ptr_to_threegauss);
   initIndex(); 
 }
 ThreeGaussResolution::~ThreeGaussResolution () {} 
 
 void ThreeGaussResolution::createParameters (std::vector<unsigned int>& pindices, PdfBase* dis) {
-  pindices.push_back(8); 
+  pindices.push_back(9); 
   pindices.push_back(dis->registerParameter(coreFraction));
   pindices.push_back(dis->registerParameter(tailFraction));
   pindices.push_back(dis->registerParameter(coreBias));
@@ -124,6 +130,7 @@ void ThreeGaussResolution::createParameters (std::vector<unsigned int>& pindices
   pindices.push_back(dis->registerParameter(tailScaleFactor));
   pindices.push_back(dis->registerParameter(outBias));
   pindices.push_back(dis->registerParameter(outScaleFactor));
+  pindices.push_back(dis->registerParameter(overallScale));
 }
 
 fptype ThreeGaussResolution::normalisation (fptype di1, fptype di2, fptype di3, fptype di4, fptype tau, fptype xmixing, fptype ymixing) const {
@@ -136,11 +143,21 @@ fptype ThreeGaussResolution::normalisation (fptype di1, fptype di2, fptype di3, 
   fptype timeIntegralTwo = tau / (1 + xmixing*xmixing);
   fptype timeIntegralThr = ymixing * timeIntegralOne;
   fptype timeIntegralFou = xmixing * timeIntegralTwo;
+
+  if (dtimeMax > dtimeMin){
+      fptype betaMin = dtimeMin/tau;
+      fptype betaMax = dtimeMax/tau;
+      timeIntegralThr = timeIntegralOne * (ymixing-exp(-betaMax)*(sinh(betaMax*ymixing)+ymixing*cosh(betaMax*ymixing)));
+      timeIntegralFou = timeIntegralTwo * (xmixing-exp(-betaMax)*(sin(betaMax*xmixing)+xmixing*cos(betaMax*xmixing)));
+      timeIntegralOne *= 1-exp(-betaMax)*(ymixing*sinh(betaMax*ymixing)+cosh(betaMax*ymixing));
+      timeIntegralTwo *= 1-exp(-betaMax)*(xmixing*sin(betaMax*xmixing)-cos(betaMax*xmixing));
+  }
        
   fptype ret = timeIntegralOne * (di1 + di2); // ~ |A|^2 + |B|^2
   ret       += timeIntegralTwo * (di1 - di2); // ~ Re(A_1 A_2^*)
   ret       -= 2*timeIntegralThr * di3;       // ~ |A|^2 - |B|^2
   ret       -= 2*timeIntegralFou * di4;       // ~ Im(A_1 A_2^*)
-
+  
+//  ret *= 2/M_2_SQRTPI;
   return ret; 
 }

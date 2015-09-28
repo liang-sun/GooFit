@@ -45,6 +45,7 @@
 /////////////////////////////////////////////////////////////////////
 
 #include "TRandom3.hh"
+#include "TRandom2.hh"
 
 TRandom* TRandom::gRandom = new TRandom3();
 

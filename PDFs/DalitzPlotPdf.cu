@@ -17,6 +17,7 @@ EXEC_TARGET inline int parIndexFromResIndex_DP (int resIndex) {
   return resonanceOffset_DP + resIndex*resonanceSize; 
 }
 
+
 EXEC_TARGET devcomplex<fptype> device_DalitzPlot_calcIntegrals (fptype m12, fptype m13, int res_i, int res_j, fptype* p, unsigned int* indices) {
   // Calculates BW_i(m12, m13) * BW_j^*(m12, m13). 
   // This calculation is in a separate function so
@@ -30,7 +31,7 @@ EXEC_TARGET devcomplex<fptype> device_DalitzPlot_calcIntegrals (fptype m12, fpty
   fptype daug2Mass  = functorConstants[indices[1] + 2]; 
   fptype daug3Mass  = functorConstants[indices[1] + 3];  
 
-  devcomplex<fptype> ret; 
+  devcomplex<fptype> ret(0.,0.); 
   if (!inDalitz(m12, m13, motherMass, daug1Mass, daug2Mass, daug3Mass)) return ret;
   fptype m23 = motherMass*motherMass + daug1Mass*daug1Mass + daug2Mass*daug2Mass + daug3Mass*daug3Mass - m12 - m13; 
 
@@ -75,6 +76,7 @@ EXEC_TARGET fptype device_DalitzPlot (fptype* evt, fptype* p, unsigned int* indi
   } 
    
   fptype ret = norm2(totalAmp); 
+//  printf("DalitzPlot %f %f w # of cacheToUse %d: %f + i*(%f)\n", m12, m13, cacheToUse, totalAmp.real, totalAmp.imag);
   int effFunctionIdx = parIndexFromResIndex_DP(numResonances); 
   fptype eff = callFunction(evt, indices[effFunctionIdx], indices[effFunctionIdx + 1]); 
   ret *= eff;
@@ -103,7 +105,7 @@ __host__ DalitzPlotPdf::DalitzPlotPdf (std::string n,
   , totalEventSize(3) // Default 3 = m12, m13, evtNum 
   , cacheToUse(0) 
   , integrators(0)
-  , calculators(0) 
+  , calculators(0)
 {
   registerObservable(_m12);
   registerObservable(_m13);
@@ -179,6 +181,97 @@ __host__ void DalitzPlotPdf::setDataSize (unsigned int dataSize, unsigned int ev
   setForceIntegrals(); 
 }
 
+__host__ fptype DalitzPlotPdf::getFractions (vector<fptype>&  fracLists) const {
+  fracLists.clear();
+  recursiveSetNormalisation(1); // Not going to normalise efficiency, 
+  // so set normalisation factor to 1 so it doesn't get multiplied by zero. 
+  // Copy at this time to ensure that the SpecialResonanceCalculators, which need the efficiency, 
+  // don't get zeroes through multiplying by the normFactor. 
+  MEMCPY_TO_SYMBOL(normalisationFactors, host_normalisation, totalParams*sizeof(fptype), 0, cudaMemcpyHostToDevice); 
+
+  int totalBins = _m12->numbins * _m13->numbins;
+  if (!dalitzNormRange) {
+    gooMalloc((void**) &dalitzNormRange, 6*sizeof(fptype));
+  
+    fptype* host_norms = new fptype[6];
+    host_norms[0] = _m12->lowerlimit;
+    host_norms[1] = _m12->upperlimit;
+    host_norms[2] = _m12->numbins;
+    host_norms[3] = _m13->lowerlimit;
+    host_norms[4] = _m13->upperlimit;
+    host_norms[5] = _m13->numbins;
+    MEMCPY(dalitzNormRange, host_norms, 6*sizeof(fptype), cudaMemcpyHostToDevice);
+    delete[] host_norms; 
+  }
+
+  for (unsigned int i = 0; i < decayInfo->resonances.size(); ++i) {
+    redoIntegral[i] = forceRedoIntegrals; 
+    if (!(decayInfo->resonances[i]->parametersChanged())) continue;
+    redoIntegral[i] = true; 
+    decayInfo->resonances[i]->storeParameters();
+  }
+  forceRedoIntegrals = false; 
+
+  // Only do this bit if masses or widths have changed.  
+  thrust::constant_iterator<fptype*> arrayAddress(dalitzNormRange); 
+  thrust::counting_iterator<int> binIndex(0); 
+
+  // NB, SpecialResonanceCalculator assumes that fit is unbinned! 
+  // And it needs to know the total event size, not just observables
+  // for this particular PDF component. 
+  thrust::constant_iterator<fptype*> dataArray(dev_event_array); 
+  thrust::constant_iterator<int> eventSize(totalEventSize);
+  thrust::counting_iterator<int> eventIndex(0); 
+
+  for (int i = 0; i < decayInfo->resonances.size(); ++i) {
+    if (redoIntegral[i]) {
+      thrust::transform(thrust::make_zip_iterator(thrust::make_tuple(eventIndex, dataArray, eventSize)),
+			thrust::make_zip_iterator(thrust::make_tuple(eventIndex + numEntries, arrayAddress, eventSize)),
+			strided_range<DEVICE_VECTOR<devcomplex<fptype> >::iterator>(cachedWaves->begin() + i, 
+										    cachedWaves->end(), 
+										    decayInfo->resonances.size()).begin(), 
+			*(calculators[i]));
+    }
+    
+    // This can be done more efficiently by exploiting symmetry? 
+    //for (int j = 0; j < decayInfo->resonances.size(); ++j) {
+    for (int j = i; j < decayInfo->resonances.size(); ++j) {
+      if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
+      devcomplex<fptype> dummy(0, 0);
+      thrust::plus<devcomplex<fptype> > complexSum; 
+      (*(integrals[i][j])) = thrust::transform_reduce(thrust::make_zip_iterator(thrust::make_tuple(binIndex, arrayAddress)),
+						      thrust::make_zip_iterator(thrust::make_tuple(binIndex + totalBins, arrayAddress)),
+						      *(integrators[i][j]), 
+						      dummy, 
+						      complexSum); 
+      if (i!=j) (*(integrals[j][i])) = conj(*(integrals[i][j]));
+    }
+  }      
+
+  // End of time-consuming integrals. 
+  complex<fptype> integralA_2(0, 0);
+  const unsigned int nres = decayInfo->resonances.size();
+  fptype matdiag[nres];
+  complex<fptype> sumIntegral(0, 0);
+  for (unsigned int i = 0; i < nres; ++i) {
+    int param_i = parameters + resonanceOffset_DP + resonanceSize*i; 
+    complex<fptype> amplitude_i(host_params[host_indices[param_i]], host_params[host_indices[param_i + 1]]);
+    for (unsigned int j = 0; j < nres; ++j) {
+      int param_j = parameters + resonanceOffset_DP + resonanceSize*j; 
+      complex<fptype> amplitude_j(host_params[host_indices[param_j]], -host_params[host_indices[param_j + 1]]); 
+      // Notice complex conjugation
+      complex<fptype> elemij = amplitude_i * amplitude_j * complex<fptype>((*(integrals[i][j])).real, (*(integrals[i][j])).imag);
+      sumIntegral += elemij; 
+      if (i ==j) matdiag[i] = real(elemij);
+    }
+  }
+  for (unsigned int i = 0; i < nres; ++i){
+      fracLists.push_back(matdiag[i] / real(sumIntegral));
+      std::cout << "Integral contribution for res # " << i << ": "<< fracLists.back() << std::endl;
+  }
+  return real(sumIntegral);
+}
+
 __host__ fptype DalitzPlotPdf::normalise () const {
   recursiveSetNormalisation(1); // Not going to normalise efficiency, 
   // so set normalisation factor to 1 so it doesn't get multiplied by zero. 
@@ -230,8 +323,9 @@ __host__ fptype DalitzPlotPdf::normalise () const {
 			*(calculators[i]));
     }
     
-    // Possibly this can be done more efficiently by exploiting symmetry? 
-    for (int j = 0; j < decayInfo->resonances.size(); ++j) {
+    // This can be done more efficiently by exploiting symmetry? 
+    //for (int j = 0; j < decayInfo->resonances.size(); ++j) {
+    for (int j = i; j < decayInfo->resonances.size(); ++j) {
       if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
       devcomplex<fptype> dummy(0, 0);
       thrust::plus<devcomplex<fptype> > complexSum; 
@@ -240,6 +334,7 @@ __host__ fptype DalitzPlotPdf::normalise () const {
 						      *(integrators[i][j]), 
 						      dummy, 
 						      complexSum); 
+      if (i!=j) (*(integrals[j][i])) = conj(*(integrals[i][j]));
     }
   }      
 
@@ -343,7 +438,8 @@ EXEC_TARGET devcomplex<fptype> SpecialResonanceCalculator::operator () (thrust::
   unsigned int params_i = indices[parameter_i+3];
 
   ret = getResonanceAmplitude(m12, m13, m23, functn_i, params_i);
-  //printf("Amplitude %f %f %f (%f, %f)\n ", m12, m13, m23, ret.real, ret.imag); 
+
+//  printf("Amplitude %f %f %f (%f, %f)\n ", m12, m13, m23, ret.real, ret.imag); 
   return ret;
 }
 

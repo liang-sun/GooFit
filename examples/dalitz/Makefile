@@ -3,9 +3,9 @@ CXX=nvcc
 LD=g++  
 OutPutOpt = -o
 
-CXXFLAGS     = -O3 -arch=sm_20 
+CXXFLAGS     = -w -O3 -arch=sm_20 
 ifeq ($(CUDALOCATION), )
-CUDALOCATION = /usr/local/cuda/
+CUDALOCATION = /usr/local/cuda-7.5/
 endif
 CUDAHEADERS = $(CUDALOCATION)/include/
 
@@ -38,6 +38,34 @@ all:	dalitz
 	$(CXX) $(INCLUDES) $(ROOT_INCLUDES) $(DEFINEFLAGS) $(CXXFLAGS) -c -o $@ $<
 
 dalitz:		DalitzFit.o $(THRUSTO) $(ROOTUTILLIB) 
+		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
+		@echo "$@ done"
+
+dalitz_plot:		DalitzFit_plot.o $(THRUSTO) $(ROOTUTILLIB) 
+		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
+		@echo "$@ done"
+
+dalitz2:		DalitzFit2.o $(THRUSTO) $(ROOTUTILLIB) 
+		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
+		@echo "$@ done"
+
+dalitz_D3pi_sig:		DalitzFit_D3pi_sig.o $(THRUSTO) $(ROOTUTILLIB) 
+		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
+		@echo "$@ done"
+
+dalitz_D3K_sig:		DalitzFit_D3K_sig.o $(THRUSTO) $(ROOTUTILLIB) 
+		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
+		@echo "$@ done"
+
+dalitz2_gen:		DalitzFit2_gen.o $(THRUSTO) $(ROOTUTILLIB) 
+		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
+		@echo "$@ done"
+
+dalitz3:		DalitzFit3.o $(THRUSTO) $(ROOTUTILLIB) 
+		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
+		@echo "$@ done"
+
+dalitz_symm:		DalitzFit_symm.o $(THRUSTO) $(ROOTUTILLIB) 
 		$(LD) $(LDFLAGS) $^ $(LIBS) $(ROOT_LIBS) $(OutPutOpt) $@
 		@echo "$@ done"
 

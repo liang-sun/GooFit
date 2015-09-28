@@ -1,3 +1,4 @@
+
 PdfBase* pdfPointer; 
 FitManager* currGlue = 0; 
 int numPars = 0; 
@@ -8,6 +9,8 @@ void specialTddpPrint (double fun);
 FitManager::FitManager (PdfBase* dat) 
   : minuit(0)
   , overrideCallLimit(-1)
+  , rnd(0)
+  , sqrtCov(0)
 {
   pdfPointer = dat;
   currGlue = this; 
@@ -15,6 +18,7 @@ FitManager::FitManager (PdfBase* dat)
 
 FitManager::~FitManager () {
   if (minuit) delete minuit; 
+  if (sqrtCov) delete sqrtCov;
 }
 
 void FitManager::setupMinuit () {
@@ -63,6 +67,62 @@ void FitManager::getMinuitValues () const {
   }
 }
 
+void FitManager::loadSample(const int iSamples) {
+    cout<<"Loading parameter list #"<<iSamples<<endl;
+    assert(iSamples<samples.size());
+    VectorXd vy = samples[iSamples];
+    vector<double> pars;
+    //int numPars = vy.rows();
+    pars.resize(numPars);
+    int counter = 0;
+    for (std::vector<Variable*>::iterator i = vars.begin(); i != vars.end(); ++i) {
+        if (!((*i)->fixed)) (*i)->value = vy(counter++);
+        pars[(*i)->getIndex()] = (*i)->value + (*i)->blind;
+//        cout<<(*i)->name<<'\t'<<counter<<'\t'<<(*i)->value<<endl;
+    }
+    pdfPointer->copyParams(pars);
+}
+
+void FitManager::setRandMinuitValues (const int nSamples) {
+  int counter = 0; 
+  vector<double> floatVarVal;
+  vector<double> floatVarErr;
+  for (std::vector<Variable*>::iterator i = vars.begin(); i != vars.end(); ++i) {
+    minuit->GetParameter(counter++, (*i)->value, (*i)->error);
+    if (!((*i)->fixed)) {
+        floatVarVal.push_back((*i)->value);
+        floatVarErr.push_back((*i)->error);
+    }
+  }
+  const int nFPars = floatVarErr.size();
+  VectorXd vmean(nFPars);
+  for (int i=0;i<nFPars;i++)
+      vmean(i) = floatVarVal[i];
+  if (sqrtCov==0){//Empty matrix
+  minuit-> mnemat(minuit->fP, nFPars);
+  MatrixXd A(nFPars,nFPars);
+  VectorXd vmean(nFPars);
+  for (int i=0;i<nFPars;i++){
+      for (int j=0;j<=i;j++)
+          A(i,j) = A(j,i) = minuit->fP[i*nFPars+j];
+  }
+  cout << "Here is a random positive-definite matrix, A:" << endl;// << A << endl << endl;
+  SelfAdjointEigenSolver<MatrixXd> es(A);
+//  MatrixXd sqrtA = es.operatorSqrt();
+//  cout << "The square root of A is: " << endl << sqrtA << endl;
+  sqrtCov = new MatrixXd(es.operatorSqrt());
+  }
+
+  VectorXd vy(nFPars);
+  samples.clear();
+  for (int ii=0;ii<nSamples;ii++){
+      for (int i=0;i<nFPars;i++) vy(i) = rnd.Gaus(0,1);
+      vy = vmean + (*sqrtCov) * vy;
+//  cout<<"Mean and random: "<<endl<<vmean<<endl<<vy<<endl;
+      samples.push_back(vy);
+  }
+}
+
 void FitFun(int &npar, double *gin, double &fun, double *fp, int iflag) {
   vector<double> pars;
   // Notice that npar is number of variable parameters, not total. 
@@ -76,7 +136,6 @@ void FitFun(int &npar, double *gin, double &fun, double *fp, int iflag) {
   pdfPointer->copyParams(pars); 
   fun = pdfPointer->calculateNLL(); 
   host_callnumber++; 
-
 #ifdef PRINTCALLS
   specialTddpPrint(fun); 
 #endif 

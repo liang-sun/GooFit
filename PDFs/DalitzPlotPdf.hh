@@ -7,7 +7,7 @@
 
 class SpecialResonanceIntegrator;
 class SpecialResonanceCalculator; 
-  
+
 class DalitzPlotPdf : public GooPdf {
 public:
   DalitzPlotPdf (std::string n, Variable* m12, Variable* m13, Variable* eventNumber, DecayInfo* decay, GooPdf* eff);
@@ -16,12 +16,11 @@ public:
   // normalisation will get *really* confused and give wrong answers. 
 
   __host__ virtual fptype normalise () const;
+  __host__ virtual fptype getFractions (vector<fptype>&  fracLists) const;
   __host__ void setDataSize (unsigned int dataSize, unsigned int evtSize = 3); 
   __host__ void setForceIntegrals (bool f = true) {forceRedoIntegrals = f;}  
 
 protected:
-
-private:
   DecayInfo* decayInfo; 
   Variable* _m12;
   Variable* _m13; 
@@ -47,7 +46,7 @@ public:
   // Class used to calculate integrals of terms BW_i * BW_j^*. 
   SpecialResonanceIntegrator (int pIdx, unsigned int ri, unsigned int rj);
   EXEC_TARGET devcomplex<fptype> operator () (thrust::tuple<int, fptype*> t) const;
-private:
+protected:
 
   unsigned int resonance_i;
   unsigned int resonance_j; 
@@ -60,7 +59,7 @@ public:
   SpecialResonanceCalculator (int pIdx, unsigned int res_idx); 
   EXEC_TARGET devcomplex<fptype> operator () (thrust::tuple<int, fptype*, int> t) const;
 
-private:
+protected:
 
   unsigned int resonance_i;
   unsigned int parameters;
