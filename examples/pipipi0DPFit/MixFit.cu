@@ -11,10 +11,10 @@
 #include "TLine.h" 
 
 // System stuff
-#include <climits>
 #include <fstream> 
 #include <sys/time.h>
 #include <sys/times.h>
+#include <algorithm>
 
 // GooFit stuff
 #include "Variable.hh" 
@@ -30,6 +30,7 @@
 #include "ConvolutionPdf.hh" 
 #include "StepPdf.hh" 
 #include "ExpPdf.hh" 
+#include "LandauPdf.hh" 
 #include "ExpGausPdf.hh" 
 #include "VoigtianPdf.hh" 
 #include "AddPdf.hh"
@@ -45,8 +46,10 @@
 #include "UnbinnedDataSet.hh"
 #include "CompositePdf.hh" 
 #include "FunctorWriter.hh" 
+#include "FlatDalitzPlotPdf.hh"
+#include "VariableBinTransform1DPdf.hh"
 
-//using namespace std;
+using namespace std;
 
 TCanvas* foo; 
 TCanvas* foodal; 
@@ -76,24 +79,32 @@ Variable* fixedRhoMass  = new Variable("rho_mass", 0.7758, 0.01, 0.7, 0.8);
 Variable* fixedRhoWidth = new Variable("rho_width", 0.1503, 0.01, 0.1, 0.2); 
 
 // Systematic variables
+bool doEffSwap = true;
 double luckyFrac = 0.5;
 double mesonRad  = 1.5;
 int normBinning = 240;   
 int blindSeed = 4;
 int mdslices = 1; 
 double md0offset = 0; 
-int md0_lower_window = -2;
-int md0_upper_window = 2;
+float md0_lower_window = -2;
+float md0_upper_window = 2;
+/*float md0_toy_width = 0.0075;
+float md0_toy_mean = 1.8654;*/
+float md0_toy_mean = 1.86347;
+float md0_toy_width = 1.26379e-02;
 double deltam_lower_window = -2;
 double deltam_upper_window = 2;
 double lowerTime = -2;
 double upperTime = 3; 
+/*double lowerTime = -5;
+double upperTime = 5; */
 double maxSigma = 0.8; 
 bool polyEff = false; 
 bool saveEffPlot = true;
 bool useHistogramSigma = false; 
 enum Bkg2Model {Histogram, Parameter, Sideband};
 Bkg2Model bkg2Model = Sideband; 
+//Bkg2Model bkg2Model = Histogram; 
 bool useBackground3Hist = true;
 bool useBackground4Hist = true;
 bool makePlots = false;
@@ -107,11 +118,13 @@ bool drop_f0_1710 = false;
 bool drop_f2_1270 = false;
 bool drop_f0_600 = false;
 bool gaussBkgTime = false; 
+//bool gaussBkgTime = true; 
 bool mikhailSetup = false; 
 int bkgHistBins = 80; 
 string paramUp = "";
 string paramDn = "";
 int bkgHistRandSeed = -1; 
+int iBkg = -1;
 
 const fptype _mD0 = 1.86484; 
 const fptype _mD02 = _mD0 *_mD0;
@@ -143,6 +156,7 @@ TH1F* dataTimePlot = 0;
 TH1F* loM23Sigma = 0;
 TH1F* hiM23Sigma = 0;
 TddpPdf* signalDalitz = 0; 
+GooPdf* bkgFlatPdf = 0; 
 IncoherentSumPdf* incsum1 = 0; 
 IncoherentSumPdf* incsum2 = 0; 
 IncoherentSumPdf* incsum3 = 0; 
@@ -156,18 +170,43 @@ GooPdf* bkg4_jsugg = 0;
 Variable* massSum = new Variable("massSum", _mD0*_mD0 + 2*piPlusMass*piPlusMass + piZeroMass*piZeroMass); // = 3.53481 
 GooPdf* kzero_veto = 0; 
 
+bool  doSigSigmaFit = false;
 bool  doToyStudy = false;
-float md0_toy_width = 0.0075;
-float md0_toy_mean = 1.8654;
-const float toySigFraction = 0.6;
+//const float toySigFraction = 0.90;
+const float toySigFraction = 1.0;
+//const float toySigFraction = 0.01;
+const float toySigSigma = 0.2;
 const float toyBkgTimeMean = 0.0;
-const float toyBkgTimeRMS = 0.7;
+const float toyBkgTimeRMS = 0.5;
+const float toySigSigmaMPV = 2.39277e-01;
+const float toySigSigmaSigma = 6.09058e-02;
 std::string toyFileName; 
 char strbuffer[1000]; 
 
 SmoothHistogramPdf* makeBackgroundHistogram (int bkgnum, string overridename = ""); 
+SmoothHistogramPdf* makeBackgroundDTimeHistogram (int bkgnum, string overridename = ""); 
 void makeToyDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_toy_mixfit/") ;
-void getBackgroundFile (int bkgType); 
+void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixfit/", bool usedtimebin = false) ;
+GooPdf* makeBkg2DalitzPdf (bool fixem = true, bool loadsigmapdf = true) ;
+GooPdf* makeBkg3DalitzPdf (bool fixem = true, bool loadsigmapdf = true) ;
+GooPdf* makeBkg4DalitzPdf (bool fixem = true, bool loadsigmapdf = true) ;
+void getBackgroundFile (int bkgType, bool usedtimebin = false); 
+GooPdf* makeBkg_sigma_strips (int bkgnum, bool usedtimebin = false) ;
+const double PIVALUE = 3.14159265358979312;
+
+const unsigned int dtimeSlices = 6;
+//const double dtime_bins[] = {-0.3, -0.06, 0.13, 0.39};
+//const double dtime_bins[] = {0.12, 0.261, 0.444, 0.747};
+const double dtime_bins[] = {0.0775, 0.1625, 0.265, 0.4025, 0.65};
+
+int getdtimebin(double t){
+    if (t<0) t= -t;
+    int i=0;
+    for (;i<dtimeSlices-1;i++){
+        if (t<dtime_bins[i]) break;
+    }
+    return i;
+}
 
 double intGaus = -1;
 double calcGauInteg(double x1, double x2){
@@ -184,7 +223,8 @@ double calcGauInteg(double x1, double x2){
 }
 
 double calcToyWeight(double sigratio, double m){
-    if (intGaus < 0) intGaus = calcGauInteg(0.0075*md0_lower_window/md0_toy_width, 0.0075*md0_upper_window/md0_toy_width);
+    if (intGaus < 0) intGaus = calcGauInteg((1.8654+0.0075*md0_lower_window-md0_toy_mean)/md0_toy_width, 
+            (1.8654+0.0075*md0_upper_window-md0_toy_mean)/md0_toy_width);
     double t = (m-md0_toy_mean)/md0_toy_width;
     double fsig = sigratio*exp(-t*t/2.)/intGaus;
     double fbkg =  (1-sigratio)/((md0_upper_window-md0_lower_window)*0.0075/md0_toy_width);
@@ -223,7 +263,6 @@ void normalise (TH1F* dat) {
   integral = 1.0 / integral;
   for (int i = 1; i <= dat->GetNbinsX(); ++i) {
     dat->SetBinContent(i, integral*dat->GetBinContent(i)); 
-    dat->SetBinError(i, integral*dat->GetBinError(i)); 
   }
 }
 
@@ -308,14 +347,14 @@ void plotFit (Variable* var, UnbinnedDataSet* dat, GooPdf* fit) {
   foo->SetLogy(false); 
 }
 
-bool readWrapper(std::ifstream& reader, std::string fname = strbuffer) {
-  std::cout<<"Now open file "<<fname<< " for reading"<<std::endl;
-  reader.open(fname.c_str());
-  assert(reader.good());
-  return true;
-}
-
-void getToyData (float sigweight = 0.9) {
+void getToyData (const float sigweight = 1.0) {
+/*    std::cout<<"Entering getToyData()"<<std::endl;
+  TH2F datatzplot("datatzplot", "", m12->numbins, m12->lowerlimit, m12->upperlimit, m13->numbins, m13->lowerlimit, m13->upperlimit); 
+  dataTimePlot = new TH1F("dataTimePlot", "", dtime->numbins+1, dtime->lowerlimit-0.01, dtime->upperlimit); 
+  dataTimePlot->SetStats(false); 
+  TH2F flatdpplot("flatdpplot", "", m12->numbins, m12->lowerlimit, m12->upperlimit, m13->numbins, m13->lowerlimit, m13->upperlimit); 
+  TH1* flatBkgTimePlot = new TH1F("flatBkgTimePlot", "", dtime->numbins+1, dtime->lowerlimit-0.01, dtime->upperlimit); 
+  flatBkgTimePlot->SetStats(false); */
   if (!data){
   std::vector<Variable*> vars;
   vars.push_back(m12);
@@ -329,7 +368,7 @@ void getToyData (float sigweight = 0.9) {
   data = new UnbinnedDataSet(vars); }
 
   std::ifstream reader;
-  readWrapper(reader, toyFileName); 
+  reader.open(toyFileName.c_str()); 
   std::string buffer;
   while (!reader.eof()) {
     reader >> buffer;
@@ -342,6 +381,7 @@ void getToyData (float sigweight = 0.9) {
   int nsig = 0;
   double sigprob = 0;
   double dummy = 0; 
+// const  wBkg1->value = 1e-5;
   double md0 = md0_toy_mean;
   while (!reader.eof()) {
     reader >> dummy;
@@ -373,21 +413,35 @@ void getToyData (float sigweight = 0.9) {
     //if (dtime->value > dtime->upperlimit) continue; 
 
     double prob = donram.Uniform(); 
+/*    double fr1 = 7.68849e-01, fr2 = 9.42101e-01;
+    double bias = 5.93635e-02;
+    double sgm1 = 9.15830e-01, sgm2 = 1.20345, sgm3 = 2.15622;*/
     double resolution = donram.Gaus(0, 1);
+    do{
+        sigma->value = donram.Landau(toySigSigmaMPV, toySigSigmaSigma);
+    }while(sigma->value<=0||sigma->value>=maxSigma);
+/*    double resolution(0);
+    if (prob < fr1) resolution = donram.Gaus(bias, sgm1); 
+    else if (prob < fr1 + fr2 - fr1*fr2) resolution = donram.Gaus(bias, sgm2); 
+    else resolution = donram.Gaus(bias, sgm3); */
     dtime->value += resolution*sigma->value; 
 
     eventNumber->value = data->getNumEvents(); 
     do{
         md0 = donram.Gaus(md0_toy_mean, md0_toy_width);
     }while(md0 <= 1.8654 + 0.0075*md0_lower_window||md0 >= 1.8654 + 0.0075*md0_upper_window);
-//    wSig0->value = sigweight;
-    wSig0->value = calcToyWeight(sigweight, md0);
+    wSig0->value = sigweight;
+//    wSig0->value = calcToyWeight(sigweight, md0);
     sigprob += wSig0->value;
+//    wBkg2->value = 1 - sigweight;
+//    wSig0->value = sigweight;
     data->addEvent(); 
     nsig ++;
 
+/*    datatzplot.Fill(m12->value, m13->value); 
+    dataTimePlot->Fill(dtime->value); */
     
-    if (data->getNumEvents() < 10) {
+    if (nsig < 10) {
       std::cout << data->getNumEvents() << " : " 
 		<< m12->value << " "
 		<< m13->value << " "
@@ -397,6 +451,8 @@ void getToyData (float sigweight = 0.9) {
     }
     //else break;
   }
+   sigma->value = toySigSigma;
+//  int nsig = data->getNumEvents();
   for (int ib = 0; ib < nsig*(1-sigweight)/sigweight; ib++){
     do{
     m12->value = donram.Uniform()*(m12->upperlimit - m12->lowerlimit)+m12->lowerlimit;
@@ -407,20 +463,281 @@ void getToyData (float sigweight = 0.9) {
     }while(!(dtime->value > dtime->lowerlimit&&dtime->value < dtime->upperlimit));
     eventNumber->value = data->getNumEvents(); 
     md0 = donram.Uniform(1.8654 + 0.0075*md0_lower_window, 1.8654 + 0.0075*md0_upper_window);
-//    wSig0->value = sigweight;
-    wSig0->value = calcToyWeight(sigweight, md0);
+    wSig0->value = sigweight;
+//    wSig0->value = calcToyWeight(sigweight, md0);
+//    wBkg2->value = 1 - sigweight;
     sigprob += wSig0->value;
     data->addEvent(); 
+/*    flatdpplot.Fill(m12->value, m13->value); 
+    flatBkgTimePlot->Fill(dtime->value); */
   }
   reader.close();
 
+/*  foo->cd();
+  datatzplot.SetStats(false); 
+  datatzplot.Draw("colz");
+  foo->SaveAs("datatzplot.png"); 
+  flatdpplot.Draw("colz");
+  foo->SaveAs("flatdpplot.png"); */
+}
+
+void loadSignalMCFile(char* fname, const float sigweight) {
+  UnbinnedDataSet**  setToFill = &data; 
+
+  std::vector<Variable*> vars;
+  vars.push_back(m12);
+  vars.push_back(m13);
+  vars.push_back(dtime);
+  vars.push_back(sigma); 
+  vars.push_back(eventNumber); 
+  vars.push_back(wSig0);
+//  vars.push_back(wBkg2);
+  if (wBkg1) vars.push_back(wBkg1);
+
+  (*setToFill) = new UnbinnedDataSet(vars); 
+  std::ifstream reader;
+  reader.open(fname); 
+  std::string buffer;
+  while (!reader.eof()) {
+    reader >> buffer;
+    if (buffer == "====") break; 
+    std::cout << buffer; 
+  }
+
+  double integralWeights[5] = {0, 0, 0, 0, 0}; 
+
+  double dummy = 0; 
+  double mass = 0; 
+  double delm = 0;
+  double sigprob = 0;
+  int events = 0; 
+  std::string fnstr = fname;
+
+  TRandom3 donram(0); 
+  if (wBkg1) wBkg1->value = 0;
+  while (!reader.eof()) {
+//    if (events >=100) break;
+    reader >> dummy;
+    if (reader.eof()) break; 
+    reader >> dummy;      // m23, m(pi+ pi-), called m12 in processToyRoot convention. 
+    reader >> m12->value; // Already swapped according to D* charge
+    reader >> m13->value;
+
+    // Errors on Dalitz variables
+    reader >> dummy; 
+    reader >> dummy; 
+    reader >> dummy; 
+
+    reader >> dtime->value;
+//    dtime->value += 8e-3;
+    reader >> sigma->value; 
+
+    if (massd0) reader >> massd0->value; // Md0
+    else reader >> mass; 
+    if (deltam) reader >> deltam->value;
+    else reader >> delm; 
+    reader >> dummy; // ProbSig
+    reader >> dummy; // Dst charge
+    reader >> dummy; // Run
+    reader >> dummy; // Event
+    reader >> wSig0->value;
+    reader >> dummy; // wBkg1
+    reader >> dummy; // wBkg2
+    reader >> dummy; // wBkg3
+    reader >> dummy; // wBkg4
+
+    if (dtime->value < dtime->lowerlimit) continue;
+    if (dtime->value > dtime->upperlimit) continue; 
+    if (sigma->value > sigma->upperlimit) continue; // Lower limit is 0, and it can't be lower than that, so whatever. 
+
+/*    integralWeights[0] += wSig0->value;
+    integralWeights[1] += wBkg1->value;
+    integralWeights[2] += wBkg2->value;
+    integralWeights[3] += wBkg3->value;
+    integralWeights[4] += wBkg4->value;*/
+    eventNumber->value = (*setToFill)->getNumEvents(); 
+    do{
+        mass = donram.Gaus(md0_toy_mean, md0_toy_width);
+    }while(mass <= 1.8654 + 0.0075*md0_lower_window||mass >= 1.8654 + 0.0075*md0_upper_window);
+//    wSig0->value = calcToyWeight(sigweight, mass);
+    wSig0->value = sigweight;// - 0.01;
+    if (wBkg1){ wBkg1->value = 0.;
+    double mistag = wSig0->value + wBkg1->value * luckyFrac;
+    wSig0->value += wBkg1->value; 
+    wBkg1->value = mistag / wSig0->value;}
+//    wBkg2->value = 1-wSig0->value ;
+    sigprob += wSig0->value;
+
+    // See comments in TddpPdf.hh for explanation of this. 
+/*    double mistag = wSig0->value + wBkg1->value * luckyFrac;
+    wSig0->value += wBkg1->value; 
+    wBkg1->value = mistag / wSig0->value; */
+
+    (*setToFill)->addEvent(); 
+    events++;
+    
+  }
+  reader.close();
+  int nsig = events;
+  int nb = 0;
+  if (!iBkg){
+   sigma->value = 0.3; 
+   sigma->value = donram.Uniform(sigma->lowerlimit, sigma->upperlimit);
+  for (int ib = 0; ib < nsig*(1-sigweight)/sigweight; ib++){
+    do{
+    m12->value = donram.Uniform()*(m12->upperlimit - m12->lowerlimit)+m12->lowerlimit;
+    m13->value = donram.Uniform()*(m13->upperlimit - m13->lowerlimit)+m13->lowerlimit;
+    }while(!cpuDalitz(m12->value, m13->value, _mD0, piZeroMass, piPlusMass, piPlusMass));
+    do{
+        dtime->value = donram.Gaus(toyBkgTimeMean, toyBkgTimeRMS);
+    }while(!(dtime->value > dtime->lowerlimit&&dtime->value < dtime->upperlimit));
+/*    double f_m23 = _mD02 + piZeroMass*piZeroMass + 2*piPlusMass*piPlusMass - m12->value - m13->value;
+    int ibin_m23 = f_m23*m23Slices/3.;
+    if (ibin_m23 <0) ibin_m23 =0; if (ibin_m23>=m23Slices) ibin_m23 = m23Slices-1;
+    double sigma_mu[] = {0.302246, 0.238852, 0.194053, 0.170296, 0.143397, 0.157525};
+    double sigma_sg[] = {0.0717727, 0.0520977, 0.0407795, 0.0385073, 0.0278172, 0.0371264};
+    double sigma_al[] = {3.0173, 4.19044, 3.94296, 4.03625, 3.56009, 5.25832};*/
+/*    do{
+        sigma->value = donram.Landau(toySigSigmaMPV, toySigSigmaSigma);
+//        sigma->value = donram.Exp(1./sigma_al[ibin_m23]) + donram.Gaus(sigma_mu[ibin_m23], sigma_sg[ibin_m23]);
+    }while(sigma->value<=0||sigma->value>=maxSigma);*/
+    eventNumber->value = data->getNumEvents(); 
+    mass = donram.Uniform(1.8654 + 0.0075*md0_lower_window, 1.8654 + 0.0075*md0_upper_window);
+//    wSig0->value = sigweight;
+//    wSig0->value = calcToyWeight(sigweight, mass);
+    wSig0->value = sigweight;
+    if (wBkg1){ wBkg1->value = 0.;
+    double mistag = wSig0->value + wBkg1->value * luckyFrac;
+    wSig0->value += wBkg1->value; 
+    wBkg1->value = mistag / wSig0->value;}
+//    wBkg2->value = 1 - sigweight;
+    sigprob += wSig0->value;
+    data->addEvent(); 
+    events++;
+    nb ++;
+//    flatdpplot.Fill(m12->value, m13->value); 
+//    flatBkgTimePlot->Fill(dtime->value); 
+  }}else if (iBkg>0){
+// sprintf(fname, "dataFiles/my_Bkg_%d_sigreg.txt", iBkg);
+//  sprintf(fname, "dataFiles/my_Bkg_%d.txt", iBkg);
+  sprintf(fname, "dataFiles/new_Bkg_%d.txt", iBkg);
+//  const int nBkgEvents [] = {13451, 29180, 18944, 77002};
+  reader.open(fname); 
+  int nBkgEvents = std::count(std::istreambuf_iterator<char>(reader),
+          std::istreambuf_iterator<char>(), '\n');
+  reader.clear(); reader.seekg(0, ios::beg);
+  nBkgEvents = 0;
+  vector<double> v_m12;
+  vector<double> v_m13;
+  vector<double> v_dtime;
+  vector<double> v_sigma;
+  for (int ib = 0; !reader.eof(); ib++){
+    reader >> dummy;
+    if (reader.eof()) break; 
+    reader >> dummy;      // m23, m(pi+ pi-), called m12 in processToyRoot convention. 
+    reader >> m12->value; // Already swapped according to D* charge
+    reader >> m13->value;
+
+    // Errors on Dalitz variables
+    reader >> dummy; 
+    reader >> dummy; 
+    reader >> dummy; 
+
+    reader >> dtime->value;
+//    dtime->value += 8e-3;
+    reader >> sigma->value; 
+
+    if (massd0) reader >> massd0->value; // Md0
+    else reader >> mass; 
+    if (deltam) reader >> deltam->value;
+    else reader >> delm; 
+    reader >> dummy; // ProbSig
+    reader >> dummy; // Dst charge
+    reader >> dummy; // Run
+    reader >> dummy; // Event
+    reader >> wSig0->value;
+    reader >> dummy; // wBkg1
+    reader >> dummy; // wBkg2
+    reader >> dummy; // wBkg3
+    reader >> dummy; // wBkg4
+//    if (donram.Rndm() > bkgprob ) continue;
+
+    if (dtime->value < dtime->lowerlimit) continue;
+    if (dtime->value > dtime->upperlimit) continue; 
+    if (sigma->value > sigma->upperlimit) continue; // Lower limit is 0, and it can't be lower than that, so whatever. */
+    nBkgEvents ++;
+    v_m12.push_back(m12->value);
+    v_m13.push_back(m13->value);
+    v_dtime.push_back(dtime->value);
+    v_sigma.push_back(sigma->value);
+  }
+  reader.close();
+  std::cout<<nBkgEvents<<" events found for bkg # "<<iBkg<<std::endl;
+  const double bkgprob = (nsig*(1-sigweight)/sigweight)/nBkgEvents;
+//  for (int ib = 0; ib < nsig*(1-sigweight)/sigweight; ib++){
+
+  for (int ib = 0; ib<nBkgEvents; ib++){
+    if (donram.Rndm() > bkgprob ) continue;
+    m12->value = v_m12[ib];
+    m13->value = v_m13[ib];
+    int ib1 = ib;// +1; if (ib1 >= nBkgEvents) ib1 = ib1%nBkgEvents;
+    int ib2 = ib+5; if (ib2 >= nBkgEvents) ib2 = ib2%nBkgEvents;
+    dtime->value = v_dtime[ib];
+    sigma->value = v_sigma[ib];
+    // TEST ONLY
+/*    do{
+    m12->value = donram.Uniform()*(m12->upperlimit - m12->lowerlimit)+m12->lowerlimit;
+    m13->value = donram.Uniform()*(m13->upperlimit - m13->lowerlimit)+m13->lowerlimit;
+    }while(!cpuDalitz(m12->value, m13->value, _mD0, piZeroMass, piPlusMass, piPlusMass));
+    double gmeans[] = {0.218148, 0.447454, 0.769272};
+    double gsigmas[] = {0.272121, 0.569585, 1.18508};
+    double gws[] = {1, 0.568378, 0.0764585};
+    double gnorm = 0;
+    for (int idx=0;idx<3;idx++) { gws[idx] *= gsigmas[idx]; gnorm += gws[idx]; }
+    for (int idx=0;idx<3;idx++)  gws[idx] /= gnorm; 
+    do{
+        double fprob = donram.Rndm();
+        int idx = 0;
+        if (fprob > gws[0]+gws[1]) idx = 2;
+        else if (fprob > gws[0]) idx = 1;
+        dtime->value = donram.Gaus(gmeans[idx], gsigmas[idx]);
+//        dtime->value = donram.Gaus(toyBkgTimeMean, toyBkgTimeRMS);
+    }while(!(dtime->value > dtime->lowerlimit&&dtime->value < dtime->upperlimit));
+   sigma->value = 0.3;
+    double f_m23 = cpuGetM23(m12->value, m13->value);
+    int ibin_m23 = f_m23*m23Slices/3.;
+    if (ibin_m23 <0) ibin_m23 =0; if (ibin_m23>=m23Slices) ibin_m23 = m23Slices-1;
+    double sigma_mu[] = {0.302246, 0.238852, 0.194053, 0.170296, 0.143397, 0.157525};
+    double sigma_sg[] = {0.0717727, 0.0520977, 0.0407795, 0.0385073, 0.0278172, 0.0371264};
+    double sigma_al[] = {3.0173, 4.19044, 3.94296, 4.03625, 3.56009, 5.25832};
+    do{
+//        sigma->value = donram.Landau(toySigSigmaMPV, toySigSigmaSigma);
+        sigma->value = donram.Exp(1./sigma_al[ibin_m23]) + donram.Gaus(sigma_mu[ibin_m23], sigma_sg[ibin_m23]);
+    }while(sigma->value<=0||sigma->value>=maxSigma);*/
+    // TEST ONLY
+    eventNumber->value = data->getNumEvents(); 
+    mass = donram.Uniform(1.8654 + 0.0075*md0_lower_window, 1.8654 + 0.0075*md0_upper_window);
+//    wSig0->value = calcToyWeight(sigweight, mass);
+    wSig0->value = sigweight;// - 0.01;
+    if (wBkg1){ wBkg1->value = 0.;
+    double mistag = wSig0->value + wBkg1->value * luckyFrac;
+    wSig0->value += wBkg1->value; 
+    wBkg1->value = mistag / wSig0->value;}
+//    wBkg2->value = 1 - wSig0->value;
+    sigprob += wSig0->value;
+    data->addEvent(); 
+    events++;
+    nb ++;
+  }
+   }
+  std::cout<<"Total loaded: "<<events<< " ("<<nb<<") "<<'\t'<<sigprob<<std::endl;
 }
 
 GooPdf* makeEfficiencyPdf () {
-  Variable* effSmoothing = new Variable("effSmoothing", 1.0, 0.1, 0, 1.25); 
-  //Variable* effSmoothing = new Variable("effSmoothing", 0); 
-  SmoothHistogramPdf* ret = new SmoothHistogramPdf("efficiency", binEffData, effSmoothing); 
-  return ret; 
+    //Variable* effSmoothing = new Variable("effSmoothing", 1.0, 0.1, 0, 1.25); 
+    Variable* effSmoothing = new Variable("effSmoothing", 0); 
+    SmoothHistogramPdf* ret = new SmoothHistogramPdf("efficiency", binEffData, effSmoothing); 
+    return ret; 
 }
 
 GooPdf* makeKzeroVeto () {
@@ -458,7 +775,7 @@ GooPdf* makeEfficiencyPoly () {
   coefficients.push_back(new Variable("x0y3",  0.06231, 0.01, -0.5, 0.5));
 
   PolynomialPdf* poly = new PolynomialPdf("efficiency", observables, coefficients, offsets, 3);
-  poly->setParameterConstantness(true); 
+//  poly->setParameterConstantness(true); 
 
   Variable* decXmin = new Variable("decXmin", 6.22596);
   Variable* decYmin = new Variable("decYmin", 6.30722);
@@ -509,29 +826,28 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
   dtop0pp->daug3Mass  = piPlusMass;
   dtop0pp->meson_radius  = mesonRad;   
 
-//  dtop0pp->_tau = new Variable("tau", 0.4116, 0.001, 0.300, 0.500);
   dtop0pp->_tau = new Variable("tau", 0.4101, 0.001, 0.300, 0.500);
 
   // Setting limits causes trouble with MNHESSE - why is this? 
   //dtop0pp->_xmixing = new Variable("xmixing", 0.01, 0.001, -0.05, 0.05);
   //dtop0pp->_ymixing = new Variable("ymixing", 0.01, 0.001, -0.05, 0.05);
-  dtop0pp->_xmixing = new Variable("xmixing", 0.0016, 0.001, 0, 0);
-  dtop0pp->_ymixing = new Variable("ymixing", 0.0055, 0.001, 0, 0);
+  dtop0pp->_xmixing = new Variable("xmixing", 0.01, 0.00001, 0, 0);
+  dtop0pp->_ymixing = new Variable("ymixing", 0.01, 0.00001, 0, 0);
 
   ptr_to_xmix = dtop0pp->_xmixing;
   ptr_to_ymix = dtop0pp->_ymixing;
   ptr_to_dtau = dtop0pp->_tau;
-
-  //ptr_to_dtau->fixed = true;
-  //ptr_to_xmix->fixed = true;
-  //ptr_to_ymix->fixed = true; 
+  
+/*  ptr_to_dtau->fixed = true;
+  ptr_to_xmix->fixed = true;
+  ptr_to_ymix->fixed = true; */
  
   ResonancePdf* rhop  = new ResonancePdf("rhop",
 					   new Variable("rhop_amp_real", 1),
 					   new Variable("rhop_amp_imag", 0),
 					   fixedRhoMass,
 					   fixedRhoWidth, 
-					   1,
+					   (unsigned int)1,
 					   PAIR_12);
 
   bool fixAmps = false;
@@ -543,7 +859,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 					   new Variable("rhom_amp_imag", -0.025, 0.1, 0, 0), 
 					   fixedRhoMass,
 					   fixedRhoWidth, 
-					   1,
+					   (unsigned int)1,
 					   PAIR_13);
 
   ResonancePdf* rho0  = new ResonancePdf("rho0", 
@@ -551,7 +867,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 					   new Variable("rho0_amp_real", 0.565, 0.001, 0, 0),
 					   fixAmps ? new Variable("rho0_amp_imag", 0.164) : 
 					   new Variable("rho0_amp_imag", 0.164, 0.1, 0, 0), 
-					   1,
+					   (unsigned int)1,
 					   fixedRhoMass,
 					   fixedRhoWidth,
 					   PAIR_23);
@@ -566,7 +882,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								  new Variable("rhop_1450_amp_imag", -0.117, 0.1, 0, 0),  
 								  rho1450Mass,
 								  rho1450Width,
-								  1,
+								  (unsigned int)1,
 								  PAIR_12);
 
   ResonancePdf* rho0_1450  = new ResonancePdf("rho0_1450",  
@@ -576,7 +892,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								  new Variable("rho0_1450_amp_imag", 0.057, 0.1, 0, 0),  
 								  rho1450Mass,
 								  rho1450Width,
-								  1,
+								  (unsigned int)1,
 								  PAIR_23);
 
   ResonancePdf* rhom_1450  = new ResonancePdf("rhom_1450",  
@@ -586,7 +902,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								  new Variable("rhom_1450_amp_imag", 0.226, 0.1, 0, 0),  
 								  rho1450Mass,
 								  rho1450Width,
-								  1,
+								  (unsigned int)1,
 								  PAIR_13);
   
   Variable* rho1700Mass  = new Variable("rhop_1700_mass",     1.720, 0.01, 1.6, 1.9);
@@ -599,7 +915,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								  new Variable("rhop_1700_amp_imag", -0.658, 0.1, 0, 0),  
 								  rho1700Mass,
 								  rho1700Width,
-								  1,
+								  (unsigned int)1,
 								  PAIR_12);
   
   ResonancePdf* rho0_1700  = new ResonancePdf("rho0_1700",  
@@ -609,7 +925,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								  new Variable("rho0_1700_amp_imag", -0.734, 0.1, 0, 0),  
 								  rho1700Mass,
 								  rho1700Width,
-								  1,
+								  (unsigned int)1,
 								  PAIR_23);
   
   ResonancePdf* rhom_1700  = new ResonancePdf("rhom_1700",  
@@ -619,7 +935,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								  new Variable("rhom_1700_amp_imag", -1.532, 0.1, 0, 0),  
 								  rho1700Mass,
 								  rho1700Width,
-								  1,
+								  (unsigned int)1,
 								  PAIR_13);
   
   ResonancePdf* f0_980  = new ResonancePdf("f0_980",  
@@ -629,7 +945,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 					     new Variable("f0_980_amp_imag", -0.013 * (-_mD02), 0.1, 0, 0),  
 					     new Variable("f0_980_mass",     0.980, 0.01, 0.8, 1.2),
 					     new Variable("f0_980_width",    0.044, 0.001, 0.001, 0.08),
-					     0,
+					     (unsigned int)0,
 					     PAIR_23);
   
   ResonancePdf* f0_1370  = new ResonancePdf("f0_1370",  
@@ -639,7 +955,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								new Variable("f0_1370_amp_imag",  0.026 * (-_mD02), 0.1, 0, 0),  
 								new Variable("f0_1370_mass",     1.434, 0.01, 1.2, 1.6),
 								new Variable("f0_1370_width",    0.173, 0.01, 0.01, 0.4),
-								0,
+								(unsigned int)0,
 								PAIR_23);
   
   ResonancePdf* f0_1500  = new ResonancePdf("f0_1500",  
@@ -649,7 +965,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								new Variable("f0_1500_amp_imag", 0.012 * (-_mD02), 0.1, 0, 0),  
 								new Variable("f0_1500_mass",     1.507, 0.01, 1.3, 1.7),
 								new Variable("f0_1500_width",    0.109, 0.01, 0.01, 0.3),
-								0,
+								(unsigned int)0,
 								PAIR_23);
   
   ResonancePdf* f0_1710  = new ResonancePdf("f0_1710",  
@@ -659,7 +975,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								new Variable("f0_1710_amp_imag", 0.087 * (-_mD02), 0.1, 0, 0),  
 								new Variable("f0_1710_mass",     1.714, 0.01, 1.5, 2.9), 
 								new Variable("f0_1710_width",    0.140, 0.01, 0.01, 0.5),
-								0,
+								(unsigned int)0,
 								PAIR_23);
   
   ResonancePdf* f2_1270  = new ResonancePdf("f2_1270",  
@@ -669,7 +985,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 								new Variable("f2_1270_amp_imag", -0.162 * (-_mD02inv), 0.1, 0, 0),  
 								new Variable("f2_1270_mass",     1.2754, 0.01, 1.0, 1.5),
 								new Variable("f2_1270_width",    0.1851, 0.01, 0.01, 0.4),
-								2,
+								(unsigned int)2,
 								PAIR_23);
   
   ResonancePdf* f0_600  = new ResonancePdf("f0_600",  
@@ -679,9 +995,9 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
 							       new Variable("f0_600_amp_imag", 0.010 * (-_mD02), 0.1, 0, 0),  
 							       new Variable("f0_600_mass",     0.500, 0.01, 0.3, 0.7),
 							       new Variable("f0_600_width",    0.400, 0.01, 0.2, 0.6), 
-							       0,
+							       (unsigned int)0,
 							       PAIR_23);
-  
+
   ResonancePdf* nonr  = new ResonancePdf("nonr", 
 							     fixAmps ? new Variable("nonr_amp_real", 0.5595 * (-1)) :
 							     new Variable("nonr_amp_real", 0.5595 * (-1),   0.001, 0, 0),
@@ -735,31 +1051,67 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
       for (int i = 0; i < mdslices; ++i) {
 	sprintf(strbuffer, "coreFrac_%i", i);
 	Variable* coreFrac = new Variable(strbuffer, 0.90, 0.001, 0.55, 0.999);
+    coreFrac->value = 7.68849e-01;
+    coreFrac->fixed = true;
+	sprintf(strbuffer, "tailFrac_%i", i);
+    Variable* tailFrac = new Variable(strbuffer, 0.90, 0.001, 0.80, 1.00); 
+    tailFrac->value = 9.42101e-01;
+    tailFrac->fixed = true;
 	sprintf(strbuffer, "coreBias_%i", i);
-//	Variable* coreBias = new Variable(strbuffer, 0.1, 0.001, -0.20, 0.30); 
-	Variable* coreBias = new Variable(strbuffer, -0.1, 0.001, -0.20, 0.30); 
+	Variable* coreBias = new Variable(strbuffer, 0.1, 0.001, -0.20, 0.30); 
+    coreBias->value = 5.93635e-02;
+    //coreBias->fixed = true;
 	sprintf(strbuffer, "coreScaleFactor_%i", i);
 	Variable* coreScaleFactor = new Variable(strbuffer, 0.96, 0.001, 0.20, 1.50); 
+    coreScaleFactor->value = 9.15830e-01; 
+    coreScaleFactor->fixed = true;
 	sprintf(strbuffer, "tailScaleFactor_%i", i);
 	Variable* tailScaleFactor = new Variable(strbuffer, 1.63, 0.001, 0.90, 6.00); 
-	resolution = new ThreeGaussResolution(coreFrac, constantOne, coreBias, coreScaleFactor, constantZero, tailScaleFactor, constantZero, constantOne); 
+    tailScaleFactor->value = 1.20345; 
+    tailScaleFactor->fixed = true;
+	sprintf(strbuffer, "outlScaleFactor_%i", i);
+    Variable* outlScaleFactor = new Variable(strbuffer, 5.0, 0.01, 0.1, 10.0); 
+    outlScaleFactor->value = 2.15622;
+    outlScaleFactor->fixed = true;
+	sprintf(strbuffer, "overallScale_%i", i);
+    Variable* overallScale = new Variable(strbuffer, 1, 0.001, 0.5, 3); 
+    //overallScale->fixed = true;
+	//resolution = new ThreeGaussResolution(coreFrac, constantOne, coreBias, coreScaleFactor, constantZero, tailScaleFactor, constantZero, constantOne); 
+    resolution = new ThreeGaussResolution(coreFrac, tailFrac, coreBias, coreScaleFactor, coreBias, tailScaleFactor, coreBias, outlScaleFactor, overallScale); 
 	resList.push_back(resolution); 
       }
     }
     else {
-      Variable* coreFrac = new Variable("coreFrac", 0.90, 0.001, 0.35, 0.999);
-      //Variable* tailFrac = new Variable("tailFrac", 0.90, 0.001, 0.80, 1.00); 
-      Variable* coreBias = new Variable("coreBias", 0.0, 0.001, -0.20, 0.30); 
+      Variable* coreFrac = new Variable("coreFrac", 0.90, 0.001, 0.75, 0.999);
+      //coreFrac->value = 9.44105e-01;
+      coreFrac->value = 7.68849e-01;
+      coreFrac->fixed = true;
+      Variable* tailFrac = new Variable("tailFrac", 0.90, 0.001, 0.80, 1.00); 
+      tailFrac->value = 9.42101e-01;
+      tailFrac->fixed = true;
+      Variable* coreBias = new Variable("coreBias", 0.1, 0.001, -0.20, 0.30); 
+      coreBias->value = 5.93635e-02;
+      //coreBias->fixed = true;
       Variable* coreScaleFactor = new Variable("coreScaleFactor", 0.96, 0.001, 0.20, 1.50); 
+      //coreScaleFactor->value = 9.54660e-01; 
+      coreScaleFactor->value = 9.15830e-01; 
+      coreScaleFactor->fixed = true;
       //Variable* tailBias = new Variable("tailBias", 0); 
       Variable* tailScaleFactor = new Variable("tailScaleFactor", 1.63, 0.001, 0.90, 6.00); 
+      //tailScaleFactor->value = 1.68843; 
+      tailScaleFactor->value = 1.20345; 
+      tailScaleFactor->fixed = true;
       //Variable* outlBias = new Variable("outlBias", 0); 
-      //Variable* outlScaleFactor = new Variable("outlScaleFactor", 5.0, 0.01, 0.1, 10.0); 
+      Variable* outlScaleFactor = new Variable("outlScaleFactor", 5.0, 0.01, 0.1, 10.0); 
+      outlScaleFactor->value = 2.15622;
+      outlScaleFactor->fixed = true;
+      Variable* overallScale = new Variable("overallScale", 1, 0.001, 0.5, 3); 
+      //overallScale->fixed = true;
       //resolution = new ThreeGaussResolution(coreFrac, tailFrac, coreBias, coreScaleFactor, tailBias, tailScaleFactor, outlBias, outlScaleFactor); 
       
-//      resolution = new ThreeGaussResolution(coreFrac, constantOne, coreBias, coreScaleFactor, constantZero, tailScaleFactor, constantZero, constantOne); 
-//      resolution = new ThreeGaussResolution(coreFrac, constantOne, constantZero, coreScaleFactor, constantZero, tailScaleFactor, constantZero, constantOne); 
-      if (!doToyStudy) resolution = new ThreeGaussResolution(coreFrac, constantOne, coreBias, coreScaleFactor, coreBias, tailScaleFactor, constantZero, constantOne); 
+      //resolution = new ThreeGaussResolution(coreFrac, constantOne, coreBias, coreScaleFactor, constantZero, tailScaleFactor, constantZero, constantOne); 
+      //resolution = new ThreeGaussResolution(coreFrac, constantOne, coreBias, coreScaleFactor, coreBias, tailScaleFactor, constantZero, constantOne, overallScale); 
+      if (!doToyStudy) resolution = new ThreeGaussResolution(coreFrac, tailFrac, coreBias, coreScaleFactor, coreBias, tailScaleFactor, coreBias, outlScaleFactor, overallScale); 
       else{
           coreBias->value = 0; coreScaleFactor->value = 1; coreScaleFactor->fixed = false;
           resolution = new ThreeGaussResolution(constantOne, constantOne, coreBias, coreScaleFactor, constantZero, constantOne, constantZero, constantOne); 
@@ -774,7 +1126,7 @@ TddpPdf* makeSignalPdf (MixingTimeResolution* resolution = 0, GooPdf* eff = 0) {
   return mixPdf; 
 }
 
-GooPdf* makeFlatBkgDalitzPdf(bool fixem = true) {
+GooPdf* makeFlatBkgDalitzPdf(bool fixem = true, bool loadsigmapdf = true) {
     vector<Variable*> offsets;
     vector<Variable*> observables;
     vector<Variable*> coefficients; 
@@ -783,68 +1135,92 @@ GooPdf* makeFlatBkgDalitzPdf(bool fixem = true) {
     observables.push_back(m12);
     observables.push_back(m13); 
     coefficients.push_back(constantOne); 
+  DecayInfo* dtop0pp = new DecayInfo();
+  dtop0pp->motherMass  = _mD0; 
+  dtop0pp->daug1Mass  = piZeroMass;
+  dtop0pp->daug2Mass  = piPlusMass;
+  dtop0pp->daug3Mass  = piPlusMass;
+  dtop0pp->meson_radius  = mesonRad;   
 
-    PolynomialPdf* poly = new PolynomialPdf("flatbkgPdf", observables, coefficients, offsets,0);
+//    PolynomialPdf* poly = new PolynomialPdf("flatbkgPdf", observables, coefficients, offsets,0);
+  FlatDalitzPlotPdf *poly = new FlatDalitzPlotPdf("flatbkgPdf", m12, m13, dtop0pp);
     Variable* g_mean = new Variable("g_mean", toyBkgTimeMean, 0.01, -0.2,0.5);
     Variable* g_sigma = new Variable("g_sigma", toyBkgTimeRMS, 0.01, 0.15, 1.5);
     GooPdf* gt = new GaussianPdf("flatbkg_timepdf", dtime, g_mean, g_sigma);
     comps.clear();
     comps.push_back(poly); 
     comps.push_back(gt);
+    if (loadsigmapdf){
+        Variable* sig_sigma_MPV = new Variable("toySigSigmaMPV", 0, -1, 0.8);
+        sig_sigma_MPV->fixed = true;
+//        Variable* sig_sigma_MPV = new Variable("toySigSigmaMPV", toySigSigmaMPV, 0.01, 0.0, 0.8);
+        Variable* sig_sigma_sigma = new Variable("toySigSigmaSigma", toySigSigmaSigma, 0.01, 0.01, 0.20);
+//        GooPdf* flatbkg_jsugg = new LandauPdf("sig0_jsugg", sigma, sig_sigma_MPV, sig_sigma_sigma );
+        GooPdf* flatbkg_jsugg = new ExpPdf("sig0_jsugg", sigma, sig_sigma_MPV);
+//        flatbkg_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); 
+        comps.push_back(flatbkg_jsugg);
+    }
+
     GooPdf* ret = new ProdPdf("flatbkg_total", comps); 
     if (fixem) ret->setParameterConstantness(true);
 
   return ret;
 }
 
-
+void makeFullFitVariables () ;
 void runToyFit (int ifile, int nfile, bool noPlots = true) {
   if (!nfile || ifile<0|| ifile >=100) return ;
+//  if (ifile + nfile >= 101 ) nfile = 100 - ifile;
   doToyStudy = true;
 //  dtime = new Variable("dtime", lowerTime, upperTime);
-  dtime = new Variable("dtime", -3, 5);
+  dtime = new Variable("dtime", -3, 6);
   dtime->numbins = (int) floor((upperTime - lowerTime) / 0.05 + 0.5); 
   //dtime->numbins = 200; 
-  //sigma = new Variable("sigma", 0, 0.8); 
-  sigma = new Variable("sigma", 0.099, 0.101); 
-  sigma->numbins = 1; // Cheating way to avoid Punzi effect for toy MC. The normalisation integral is now a delta function! 
+  //sigma = new Variable("sigma", 0.099, 0.101); 
+  //sigma->numbins = 1; // Cheating way to avoid Punzi effect for toy MC. The normalisation integral is now a delta function! 
+  sigma = new Variable("sigma", 0, maxSigma); 
+  sigma->numbins = (int) floor((maxSigma / 0.01) + 0.5); 
   m12   = new Variable("m12",   0, 3);
   m12->numbins = 240;
   m13   = new Variable("m13",   0, 3); 
   m13->numbins = 240;
   eventNumber = new Variable("eventNumber", 0, INT_MAX);
   wSig0 = new Variable("wSig0", 0, 1);
+//  wBkg1 = new Variable("wBkg1", 0, 1);
+//  wBkg2 = new Variable("wBkg2", 0, 1);
+//    makeFullFitVariables();
 
   for (int i =0 ;i<nfile;i++){
-//      sprintf(strbuffer, "dataFiles/toyPipipi0/dalitz_toyMC_%03d.txt", (i+ifile)%100);
-      sprintf(strbuffer, "dataFiles/toyPipipi0/dalitz_toyMC_%03d.txt", ifile);
+      sprintf(strbuffer, "dataFiles/toyPipipi0/dalitz_toyMC_%03d.txt", (i+ifile)%100);
       toyFileName = strbuffer;
       getToyData(toySigFraction);
   }
 
+//  getToyData(0.999999);
 
   //TruthResolution* dat = new TruthResolution();
   //TddpPdf* mixPdf = makeSignalPdf(dat); 
   signalDalitz = makeSignalPdf(); 
   signalDalitz->setDataSize(data->getNumEvents(),6); // Default 5 is fine for toys 
-  sig0_jsugg = new ExpPdf("sig0_jsugg", sigma, constantZero);
+  Variable* sig_sigma_MPV = new Variable("toySigSigmaMPV", toySigSigmaMPV, 0.01, 0.0, 0.8);
+  Variable* sig_sigma_sigma = new Variable("toySigSigmaSigma", toySigSigmaSigma, 0.01, 0.01, 0.20);
+  sig0_jsugg = new LandauPdf("sig0_jsugg", sigma, sig_sigma_MPV, sig_sigma_sigma );
 //  sig0_jsugg = makeBkg_sigma_strips(0);
-  sig0_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); 
+//  sig0_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); 
   sig0_jsugg->setParameterConstantness(true); 
   comps.clear(); 
   comps.push_back(signalDalitz);
 //  comps.push_back(sig0_jsugg); 
   std::cout << "Creating overall PDF\n"; 
   ProdPdf* overallSignal = new ProdPdf("overallSignal", comps);
-  GooPdf* bkgPdf = makeFlatBkgDalitzPdf();
-  bkgPdf->setParameterConstantness(true);
+  bkgFlatPdf = makeFlatBkgDalitzPdf();
 
   std::vector<Variable*> evtWeights;
   evtWeights.push_back(wSig0);
 //  evtWeights.push_back(wBkg2);
   std::vector<PdfBase*> components;
   components.push_back(signalDalitz); 
-  components.push_back(bkgPdf); 
+  components.push_back(bkgFlatPdf); 
   EventWeightedAddPdf* mixPdf = new EventWeightedAddPdf("total", evtWeights, components);
 //  GooPdf* mixPdf = overallSignal;
 
@@ -879,15 +1255,15 @@ void loadDataFile (char* fname, UnbinnedDataSet** setToFill, int effSkip) {
   vars.push_back(sigma); 
   vars.push_back(eventNumber); 
   vars.push_back(wSig0);
-  vars.push_back(wBkg1);
+  if (wBkg1) vars.push_back(wBkg1);
   vars.push_back(wBkg2);
   vars.push_back(wBkg3);
-  vars.push_back(wBkg4);
+//  vars.push_back(wBkg4);
   if (massd0) vars.push_back(massd0); 
 
   (*setToFill) = new UnbinnedDataSet(vars); 
   std::ifstream reader;
-  readWrapper(reader,fname); 
+  reader.open(fname); 
   std::string buffer;
   while (!reader.eof()) {
     reader >> buffer;
@@ -901,6 +1277,8 @@ void loadDataFile (char* fname, UnbinnedDataSet** setToFill, int effSkip) {
   double mass = 0; 
   double delm = 0;
   int events = 0; 
+  std::string fnstr = fname;
+  bool iseff = fnstr.find("efficiency") != std::string::npos;
 
   while (!reader.eof()) {
     reader >> dummy;
@@ -915,6 +1293,7 @@ void loadDataFile (char* fname, UnbinnedDataSet** setToFill, int effSkip) {
     reader >> dummy; 
 
     reader >> dtime->value;
+//    dtime->value += 8e-3;
     reader >> sigma->value; 
 
     if (massd0) reader >> massd0->value; // Md0
@@ -926,11 +1305,19 @@ void loadDataFile (char* fname, UnbinnedDataSet** setToFill, int effSkip) {
     reader >> dummy; // Run
     reader >> dummy; // Event
     reader >> wSig0->value;
-    reader >> wBkg1->value;
+    if (wBkg1) reader >> wBkg1->value; else reader >> dummy;
     reader >> wBkg2->value;
     reader >> wBkg3->value;
-    reader >> wBkg4->value;
+    reader >> dummy;
+//    reader >> wBkg4->value;
 
+
+    if (!iseff){
+/*    wSig0->value = 9.02411376356893058e-01;
+    if (wBkg1) wBkg1->value = 4.19772910156004009e-04;
+    wBkg2->value = 4.18970778877684122e-02;
+    wBkg3->value = 2.87153872140456685e-02;
+//    wBkg4->value = 2.65563856311367801e-02;*/
     if (massd0) {
       if (massd0->value <= massd0->lowerlimit) continue;
       if (massd0->value >= massd0->upperlimit) continue;
@@ -939,7 +1326,7 @@ void loadDataFile (char* fname, UnbinnedDataSet** setToFill, int effSkip) {
       // Enforce signal box on all data sets! 
       if (mass <= 1.8654 + 0.0075*md0_lower_window + md0offset) continue;
       if (mass >= 1.8654 + 0.0075*md0_upper_window + md0offset) continue;
-    }
+    }}
     if (deltam) {
       if (deltam->value >= deltam->upperlimit) continue;
       if (deltam->value <= deltam->lowerlimit) continue;
@@ -954,16 +1341,18 @@ void loadDataFile (char* fname, UnbinnedDataSet** setToFill, int effSkip) {
     if (sigma->value > sigma->upperlimit) continue; // Lower limit is 0, and it can't be lower than that, so whatever. 
 
     integralWeights[0] += wSig0->value;
-    integralWeights[1] += wBkg1->value;
+    integralWeights[1] += wBkg1?wBkg1->value:0;
     integralWeights[2] += wBkg2->value;
     integralWeights[3] += wBkg3->value;
-    integralWeights[4] += wBkg4->value;
+    integralWeights[4] += 1-wSig0->value-wBkg2->value-wBkg3->value-(wBkg1?wBkg1->value:0);
+//    integralWeights[4] += wBkg4->value;
     eventNumber->value = (*setToFill)->getNumEvents(); 
 
     // See comments in TddpPdf.hh for explanation of this. 
+    if (wBkg1){
     double mistag = wSig0->value + wBkg1->value * luckyFrac;
     wSig0->value += wBkg1->value; 
-    wBkg1->value = mistag / wSig0->value; 
+    wBkg1->value = mistag / wSig0->value; }
 
     if ((binEffData) && (0 == events % effSkip)) {
       double weight = weightHistogram->GetBinContent(weightHistogram->FindBin(m12->value, m13->value)); 
@@ -971,6 +1360,12 @@ void loadDataFile (char* fname, UnbinnedDataSet** setToFill, int effSkip) {
       binEffData->addWeightedEvent(weight);
       //binEffData->addEvent();
       if (underlyingBins) underlyingBins->Fill(m12->value, m13->value, weight); 
+      if (doEffSwap){
+      double swapmass = m12->value; m12->value = m13->value; m13->value = swapmass;
+      weight = weightHistogram->GetBinContent(weightHistogram->FindBin(m12->value, m13->value));
+      binEffData->addWeightedEvent(weight);
+      if (underlyingBins) underlyingBins->Fill(m12->value, m13->value, weight);
+      swapmass = m12->value; m12->value = m13->value; m13->value = swapmass;     }
     }
     else (*setToFill)->addEvent(); 
     events++;
@@ -1016,6 +1411,7 @@ void makeFullFitVariables () {
 
   dtime = new Variable("dtime", lowerTime, upperTime);
   dtime->numbins = (int) floor((upperTime - lowerTime) / 0.05 + 0.5); 
+//  dtime->numbins = (int) floor((upperTime - lowerTime) / 0.10 + 0.5); 
   sigma = new Variable("sigma", 0, maxSigma); 
   sigma->numbins = (int) floor((maxSigma / 0.01) + 0.5); 
   m12   = new Variable("m12",   0, 3);
@@ -1567,12 +1963,55 @@ ChisqInfo* getAdaptiveChisquare (TH2F* datPlot, TH2F* pdfPlot) {
 void makeToyDalitzPlots (GooPdf* overallSignal, string plotdir ) {
   foo->cd(); 
 
+  TH1F* sigma_dat_hist[m23Slices];
+  TH1F* sigma_pdf_hist[m23Slices];
+  TH1F* sigma_sig_hist[m23Slices];
+  TH1F* sigma_bg_2_hist[m23Slices];
+  TH1F* sigma_bg_3_hist[m23Slices];
+  TH1F* sigma_bg_4_hist[m23Slices];
+  for (int i=0;i<m23Slices;i++){
+    sprintf(strbuffer, "bkg_sigma_pdf_%i", i);
+    sigma_dat_hist[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);
+    sigma_dat_hist[i]->SetStats(false); 
+    sigma_dat_hist[i]->SetMarkerStyle(8); 
+    sigma_dat_hist[i]->SetMarkerSize(1.2);
+    sigma_dat_hist[i]->GetXaxis()->SetTitle("#sigma_{t} [ps]");
+    sprintf(strbuffer, "Events / %d fs", int(1e3*sigma_dat_hist[i]->GetBinWidth(1)));
+    sigma_dat_hist[i]->GetYaxis()->SetTitle(strbuffer); 
+    sprintf(strbuffer, "sigma_pdf_hist_%i", i);
+    sigma_pdf_hist[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);
+    sigma_pdf_hist[i]->SetStats(false); 
+    sigma_pdf_hist[i]->SetLineColor(kBlue); 
+    sigma_pdf_hist[i]->SetLineWidth(3); 
+    sprintf(strbuffer, "sigma_sig_hist_%i", i);
+    sigma_sig_hist[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);
+    sigma_sig_hist[i]->SetStats(false); 
+    sigma_sig_hist[i]->SetLineColor(kRed); 
+    sigma_sig_hist[i]->SetLineWidth(3); 
+    sprintf(strbuffer, "sigma_bg_2_hist_%i", i);
+    sigma_bg_2_hist[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);
+    sigma_bg_2_hist[i]->SetStats(false); 
+    sigma_bg_2_hist[i]->SetLineColor(kMagenta); 
+    sigma_bg_2_hist[i]->SetLineWidth(3); 
+    sprintf(strbuffer, "sigma_bg_3_hist_%i", i);
+    sigma_bg_3_hist[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);
+    sigma_bg_3_hist[i]->SetStats(false); 
+    sigma_bg_3_hist[i]->SetLineColor(kMagenta); 
+    sigma_bg_3_hist[i]->SetLineWidth(3); 
+    sprintf(strbuffer, "sigma_bg_4_hist_%i", i);
+    sigma_bg_4_hist[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);
+    sigma_bg_4_hist[i]->SetStats(false); 
+    sigma_bg_4_hist[i]->SetLineColor(kMagenta); 
+    sigma_bg_4_hist[i]->SetLineWidth(3); 
+  }
+
   TH1F dtime_dat_hist("dtime_dat_hist", "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
   dtime_dat_hist.SetStats(false); 
   dtime_dat_hist.SetMarkerStyle(8); 
   dtime_dat_hist.SetMarkerSize(1.2);
   dtime_dat_hist.GetXaxis()->SetTitle("Decay time [ps]");
-  dtime_dat_hist.GetYaxis()->SetTitle("Events / 50 fs"); 
+  sprintf(strbuffer, "Events / %d fs", int(1e3*dtime_dat_hist.GetBinWidth(1)));
+  dtime_dat_hist.GetYaxis()->SetTitle(strbuffer); 
   TH1F dtime_pdf_hist("dtime_pdf_hist", "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
   dtime_pdf_hist.SetStats(false); 
   dtime_pdf_hist.SetLineColor(kBlue); 
@@ -1581,37 +2020,144 @@ void makeToyDalitzPlots (GooPdf* overallSignal, string plotdir ) {
   dtime_sig_hist.SetStats(false); 
   dtime_sig_hist.SetLineColor(kRed); 
   dtime_sig_hist.SetLineWidth(3); 
-  TH1F dtime_bg_hist("dtime_bg_hist", "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
-  dtime_bg_hist.SetStats(false); 
-  dtime_bg_hist.SetLineColor(kMagenta); 
-  dtime_bg_hist.SetLineWidth(3); 
+  TH1F dtime_bg_2_hist("dtime_bg_2_hist", "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
+  dtime_bg_2_hist.SetStats(false); 
+  dtime_bg_2_hist.SetLineColor(kMagenta); 
+  dtime_bg_2_hist.SetLineWidth(3); 
+  TH1F dtime_bg_3_hist("dtime_bg_3_hist", "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
+  dtime_bg_3_hist.SetStats(false); 
+  dtime_bg_3_hist.SetLineColor(kMagenta); 
+  dtime_bg_3_hist.SetLineWidth(3); 
+  TH1F dtime_bg_4_hist("dtime_bg_4_hist", "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
+  dtime_bg_4_hist.SetStats(false); 
+  dtime_bg_4_hist.SetLineColor(kMagenta); 
+  dtime_bg_4_hist.SetLineWidth(3); 
+
+  TH1F m12_dat_hist("m12_dat_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_dat_hist.SetStats(false); 
+  m12_dat_hist.SetMarkerStyle(8); 
+  m12_dat_hist.SetMarkerSize(1.2);
+  m12_dat_hist.GetXaxis()->SetTitle("m^{2}(#pi^{+} #pi^{0}) [GeV]");
+  sprintf(strbuffer, "Events / %.1f MeV", 1e3*m12_dat_hist.GetBinWidth(1));
+  m12_dat_hist.GetYaxis()->SetTitle(strbuffer); 
+  TH1F m12_pdf_hist("m12_pdf_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_pdf_hist.SetStats(false); 
+  m12_pdf_hist.SetLineColor(kBlue); 
+  m12_pdf_hist.SetLineWidth(3); 
+  TH1F m12_sig_hist("m12_sig_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_sig_hist.SetStats(false); 
+  m12_sig_hist.SetLineColor(kRed); 
+  m12_sig_hist.SetLineWidth(3); 
+  TH1F m12_bg_2_hist("m12_bg_2_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_bg_2_hist.SetStats(false); 
+  m12_bg_2_hist.SetLineColor(kMagenta); 
+  m12_bg_2_hist.SetLineWidth(3); 
+  TH1F m12_bg_3_hist("m12_bg_3_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_bg_3_hist.SetStats(false); 
+  m12_bg_3_hist.SetLineColor(kMagenta); 
+  m12_bg_3_hist.SetLineWidth(3); 
+  TH1F m12_bg_4_hist("m12_bg_4_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_bg_4_hist.SetStats(false); 
+  m12_bg_4_hist.SetLineColor(kMagenta); 
+  m12_bg_4_hist.SetLineWidth(3); 
+
+  TH1F m13_dat_hist("m13_dat_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_dat_hist.SetStats(false); 
+  m13_dat_hist.SetMarkerStyle(8); 
+  m13_dat_hist.SetMarkerSize(1.2);
+  m13_dat_hist.GetXaxis()->SetTitle("m^{2}(#pi^{-} #pi^{0}) [GeV]");
+  sprintf(strbuffer, "Events / %.1f MeV", 1e3*m13_dat_hist.GetBinWidth(1));
+  m13_dat_hist.GetYaxis()->SetTitle(strbuffer); 
+  TH1F m13_pdf_hist("m13_pdf_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_pdf_hist.SetStats(false); 
+  m13_pdf_hist.SetLineColor(kBlue); 
+  m13_pdf_hist.SetLineWidth(3); 
+  TH1F m13_sig_hist("m13_sig_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_sig_hist.SetStats(false); 
+  m13_sig_hist.SetLineColor(kRed); 
+  m13_sig_hist.SetLineWidth(3); 
+  TH1F m13_bg_2_hist("m13_bg_2_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_bg_2_hist.SetStats(false); 
+  m13_bg_2_hist.SetLineColor(kMagenta); 
+  m13_bg_2_hist.SetLineWidth(3); 
+  TH1F m13_bg_3_hist("m13_bg_3_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_bg_3_hist.SetStats(false); 
+  m13_bg_3_hist.SetLineColor(kMagenta); 
+  m13_bg_3_hist.SetLineWidth(3); 
+  TH1F m13_bg_4_hist("m13_bg_4_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_bg_4_hist.SetStats(false); 
+  m13_bg_4_hist.SetLineColor(kMagenta); 
+  m13_bg_4_hist.SetLineWidth(3); 
+
+/*  TH1F m23_dat_hist("m23_dat_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m23_dat_hist.SetStats(false); 
+  m23_dat_hist.SetMarkerStyle(8); 
+  m23_dat_hist.SetMarkerSize(1.2);
+  m23_dat_hist.GetXaxis()->SetTitle("m^{2}(#pi^{-} #pi^{+}) [GeV]");
+  m23_dat_hist.GetYaxis()->SetTitle("Events / 12.5 MeV"); 
+  TH1F m23_pdf_hist("m23_pdf_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m23_pdf_hist.SetStats(false); 
+  m23_pdf_hist.SetLineColor(kBlue); 
+  m23_pdf_hist.SetLineWidth(3); */
 
 
   double totalPdf = 0; 
   double totalPdf_sig = 0; 
-  double totalPdf_bg = 0; 
+  double totalPdf_bg_2 = 0; 
+  double totalPdf_bg_3 = 0; 
+  double totalPdf_bg_4 = 0; 
   double totalDat = 0; 
   double totalSigProb = 0;
-  double totalBGProb = 0;
+  double totalBGProb1 = 0;
+  double totalBGProb2 = 0;
+  double totalBGProb3 = 0;
+  double totalBGProb4 = 0;
 
   for (unsigned int evt = 0; evt < data->getNumEvents(); ++evt) {
+    double currSigma = data->getValue(sigma, evt);
+
     double currTime = data->getValue(dtime, evt);
     dtime_dat_hist.Fill(currTime); 
+    double data_m12 = data->getValue(m12, evt);
+    m12_dat_hist.Fill(data_m12); 
+
+    double data_m13 = data->getValue(m13, evt);
+    m13_dat_hist.Fill(data_m13); 
+
+    double data_m23 = cpuGetM23(data_m12, data_m13);
+    int m23bin = (int) floor(data_m23*m23Slices/3.);
+    sigma_dat_hist[m23bin]->Fill(currSigma);
+
     totalSigProb += data->getValue(wSig0, evt);
-    totalBGProb += 1-data->getValue(wSig0, evt);
+    if (wBkg1) totalBGProb1 += data->getValue(wBkg1, evt);
+    totalBGProb2 += data->getValue(wBkg2, evt);
+    totalBGProb3 += data->getValue(wBkg3, evt);
+    totalBGProb4 += 1-data->getValue(wSig0, evt)-data->getValue(wBkg2, evt)-data->getValue(wBkg3, evt);
     totalDat++; 
   }
+  bool dependsOnSigma = true; 
+  PdfBase::obsCont obses;
+  overallSignal->getObservables(obses); 
+  if (std::find(obses.begin(), obses.end(), sigma) == obses.end()) dependsOnSigma = false; 
   std::cout << "totalData = " << totalDat << ", totalSigProb = " << totalSigProb << std::endl;
-  std::vector<Variable*> vars;
-  vars.push_back(m12);
-  vars.push_back(m13);
-  vars.push_back(dtime);
-  vars.push_back(sigma); 
-  vars.push_back(eventNumber); 
-  vars.push_back(wSig0); 
-  UnbinnedDataSet currData(vars); 
-  sigma->value = 0.1;   
+    std::vector<Variable*> vars;
+    vars.push_back(m12);
+    vars.push_back(m13);
+    vars.push_back(dtime);
+    vars.push_back(sigma); 
+    vars.push_back(eventNumber); 
+    vars.push_back(wSig0); 
+    if (wBkg1) vars.push_back(wBkg1); 
+    vars.push_back(wBkg2); 
+    vars.push_back(wBkg3); 
+    UnbinnedDataSet currData(vars); 
+//  sigma->value = 0.1;   
+  sigma->value = 3.31412298442618769e-01;   
   wSig0->value = totalSigProb / totalDat;
+  wBkg2->value =  totalBGProb2  / totalDat ;
+  wBkg3->value =  totalBGProb3  / totalDat ;
+  wBkg4->value =  1 - wSig0->value - wBkg2->value - wBkg3->value ;
+  if (wBkg1) wBkg1->value = totalBGProb1/totalDat;
   int evtCounter = 0; 
 
   for (int i = 0; i < m12->numbins; ++i) {
@@ -1627,41 +2173,232 @@ void makeToyDalitzPlots (GooPdf* overallSignal, string plotdir ) {
           }
       }
   }
-
-  overallSignal->setData(&currData);
-  signalDalitz->setDataSize(currData.getNumEvents(),6);
-  std::vector<std::vector<double> > pdfValues;
-  overallSignal->getCompProbsAtDataPoints(pdfValues);
+/*  currData.setValueForAllEvents(sigma); 
+  currData.setValueForAllEvents(wSig0); 
+  currData.setValueForAllEvents(wBkg2); */
+//  signalDalitz->setDataSize(currData.getNumEvents(),wBkg1?6+1:6);
+  signalDalitz->setDataSize(currData.getNumEvents(),wBkg1?8+1:8);
+  for (int k = 0; k < sigma->numbins; ++k) {
+      sigma->value = sigma->lowerlimit + (sigma->upperlimit - sigma->lowerlimit)*(k + 0.5) / sigma->numbins; 
+      currData.setValueForAllEvents(sigma);       
+      overallSignal->setData(&currData);
+      std::vector<std::vector<double> > pdfValues;
+      overallSignal->getCompProbsAtDataPoints(pdfValues);
+      double totp[6] = {0,0,0,0,0,0};
+      double psig[6] = {0,0,0,0,0,0};
+      double pbg2[6] = {0,0,0,0,0,0};
+      double pbg3[6] = {0,0,0,0,0,0};
+      double pbg4[6] = {0,0,0,0,0,0};
   for (unsigned int j = 0; j < pdfValues[0].size(); ++j) {
       double currTime = currData.getValue(dtime, j);
+//      dtime_pdf_hist.Fill(currTime, pdfValues[0][j]);
       dtime_sig_hist.Fill(currTime, pdfValues[1][j]);
-      dtime_bg_hist .Fill(currTime, pdfValues[2][j]);
+      dtime_bg_2_hist .Fill(currTime, pdfValues[2][j]);
+      dtime_bg_3_hist .Fill(currTime, pdfValues[2][j]);
+      dtime_bg_4_hist .Fill(currTime, pdfValues[4][j]);
+      double currm12 = currData.getValue(m12, j);
+//      m12_pdf_hist.Fill(currm12, pdfValues[0][j]);
+      m12_sig_hist.Fill(currm12, pdfValues[1][j]);
+      m12_bg_2_hist .Fill(currm12, pdfValues[2][j]);
+      m12_bg_3_hist .Fill(currm12, pdfValues[3][j]);
+      m12_bg_4_hist .Fill(currm12, pdfValues[4][j]);
+
+      double currm13 = currData.getValue(m13, j);
+//      m13_pdf_hist.Fill(currm13, pdfValues[0][j]);
+      m13_sig_hist.Fill(currm13, pdfValues[1][j]);
+      m13_bg_2_hist .Fill(currm13, pdfValues[2][j]);
+      m13_bg_3_hist .Fill(currm13, pdfValues[3][j]);
+      m13_bg_4_hist .Fill(currm13, pdfValues[4][j]);
+      double currm23 = cpuGetM23(currm12, currm13);
+      int m23bin = (int) floor(currm23*m23Slices/3.);
+
+      totp[m23bin] += pdfValues[0][j]; 
+      psig[m23bin] += pdfValues[1][j];
+      pbg2[m23bin]  += pdfValues[2][j];
+      pbg3[m23bin]  += pdfValues[3][j];
+      pbg4[m23bin]  += pdfValues[4][j];
       totalPdf     += pdfValues[0][j]; 
       totalPdf_sig += pdfValues[1][j];
-      totalPdf_bg  += pdfValues[2][j];
-  }    
+      totalPdf_bg_2  += pdfValues[2][j];
+      totalPdf_bg_3  += pdfValues[3][j];
+      totalPdf_bg_4  += pdfValues[4][j];
+  }
+  for (int ib=0;ib<m23Slices;ib++){
+//  sigma_pdf_hist[ib]->SetBinContent(k+1,totp[ib]);
+  sigma_sig_hist[ib]->SetBinContent(k+1,psig[ib]);
+  sigma_bg_2_hist[ib]->SetBinContent(k+1,pbg2[ib]);
+  sigma_bg_3_hist[ib]->SetBinContent(k+1,pbg3[ib]);
+  sigma_bg_4_hist[ib]->SetBinContent(k+1,pbg4[ib]);
+  }
+  }
+  for (int ib=0;ib<m23Slices;ib++){
+  for (int i = 1; i <= sigma->numbins; ++i) {
+      sigma_sig_hist[ib]->SetBinContent(i, sigma_sig_hist[ib]->GetBinContent(i)*totalSigProb/totalPdf_sig);
+      sigma_bg_2_hist[ib]->SetBinContent(i, sigma_bg_2_hist[ib]->GetBinContent(i)*totalBGProb2/totalPdf_bg_2);
+      sigma_bg_3_hist[ib]->SetBinContent(i, sigma_bg_3_hist[ib]->GetBinContent(i)*totalBGProb3/totalPdf_bg_3);
+      sigma_bg_4_hist[ib]->SetBinContent(i, sigma_bg_4_hist[ib]->GetBinContent(i)*totalBGProb4/totalPdf_bg_4);
+//      sigma_pdf_hist[ib]->SetBinContent(i, sigma_sig_hist[ib]->GetBinContent(i) + sigma_bg_hist[ib]->GetBinContent(i));
+  }
+  sigma_pdf_hist[ib]->Reset();
+  sigma_pdf_hist[ib]->Add(sigma_sig_hist[ib]);
+  sigma_pdf_hist[ib]->Add(sigma_bg_2_hist[ib]);
+  sigma_pdf_hist[ib]->Add(sigma_bg_3_hist[ib]);
+  sigma_pdf_hist[ib]->Add(sigma_bg_4_hist[ib]);
+  }
   for (int i = 1; i <= dtime->numbins; ++i) {
+//      dtime_pdf_hist.SetBinContent(i, dtime_pdf_hist.GetBinContent(i)*totalSigProb/totalPdf);
       dtime_sig_hist.SetBinContent(i, dtime_sig_hist.GetBinContent(i)*totalSigProb/totalPdf_sig);
-      dtime_bg_hist.SetBinContent(i, dtime_bg_hist.GetBinContent(i)*totalBGProb/totalPdf_bg);
-      dtime_pdf_hist.SetBinContent(i, dtime_sig_hist.GetBinContent(i) + dtime_bg_hist.GetBinContent(i));
+      dtime_bg_2_hist.SetBinContent(i, dtime_bg_2_hist.GetBinContent(i)*totalBGProb2/totalPdf_bg_2);
+      dtime_bg_3_hist.SetBinContent(i, dtime_bg_3_hist.GetBinContent(i)*totalBGProb3/totalPdf_bg_3);
+      dtime_bg_4_hist.SetBinContent(i, dtime_bg_4_hist.GetBinContent(i)*totalBGProb4/totalPdf_bg_4);
+//      dtime_pdf_hist.SetBinContent(i, dtime_sig_hist.GetBinContent(i) + dtime_bg_hist.GetBinContent(i));
+  }
+  dtime_pdf_hist.Reset();
+  dtime_pdf_hist.Add(&dtime_sig_hist);
+  dtime_pdf_hist.Add(&dtime_bg_2_hist);
+  dtime_pdf_hist.Add(&dtime_bg_3_hist);
+  dtime_pdf_hist.Add(&dtime_bg_4_hist);
+  for (int i = 1; i <= m12->numbins; ++i) {
+      m12_sig_hist.SetBinContent(i, m12_sig_hist.GetBinContent(i)*totalSigProb/totalPdf_sig);
+      m12_bg_2_hist.SetBinContent(i, m12_bg_2_hist.GetBinContent(i)*totalBGProb2/totalPdf_bg_2);
+      m12_bg_3_hist.SetBinContent(i, m12_bg_3_hist.GetBinContent(i)*totalBGProb3/totalPdf_bg_3);
+      m12_bg_4_hist.SetBinContent(i, m12_bg_4_hist.GetBinContent(i)*totalBGProb4/totalPdf_bg_4);
+//      m12_pdf_hist.SetBinContent(i, m12_sig_hist.GetBinContent(i) + m12_bg_hist.GetBinContent(i));
+  }
+  m12_pdf_hist.Reset();
+  m12_pdf_hist.Add(&m12_sig_hist);
+  m12_pdf_hist.Add(&m12_bg_2_hist);
+  m12_pdf_hist.Add(&m12_bg_3_hist);
+  m12_pdf_hist.Add(&m12_bg_4_hist);
+  for (int i = 1; i <= m13->numbins; ++i) {
+      m13_sig_hist.SetBinContent(i, m13_sig_hist.GetBinContent(i)*totalSigProb/totalPdf_sig);
+      m13_bg_2_hist.SetBinContent(i, m13_bg_2_hist.GetBinContent(i)*totalBGProb2/totalPdf_bg_2);
+      m13_bg_3_hist.SetBinContent(i, m13_bg_3_hist.GetBinContent(i)*totalBGProb3/totalPdf_bg_3);
+      m13_bg_4_hist.SetBinContent(i, m13_bg_4_hist.GetBinContent(i)*totalBGProb4/totalPdf_bg_4);
+//      m13_pdf_hist.SetBinContent(i, m13_sig_hist.GetBinContent(i) + m13_bg_hist.GetBinContent(i));
+  }
+  m13_pdf_hist.Reset();
+  m13_pdf_hist.Add(&m13_sig_hist);
+  m13_pdf_hist.Add(&m13_bg_2_hist);
+  m13_pdf_hist.Add(&m13_bg_3_hist);
+  m13_pdf_hist.Add(&m13_bg_4_hist);
+/*  const int division = 2; 
+  for (int half = 0; half < division; ++half) {
+    std::vector<Variable*> vars;
+    vars.push_back(m12);
+    vars.push_back(m13);
+    vars.push_back(dtime);
+    vars.push_back(sigma); 
+    vars.push_back(eventNumber); 
+    UnbinnedDataSet currData(vars); 
+
+//    sigma->value = 0.5; 
+    int evtCounter = 0; 
+    for (int i = 0; i < m12->numbins; ++i) {
+      m12->value = m12->lowerlimit + (m12->upperlimit - m12->lowerlimit)*(i + 0.5) / m12->numbins; 
+      for (int j = 0; j < m13->numbins; ++j) {
+	m13->value = m13->lowerlimit + (m13->upperlimit - m13->lowerlimit)*(j + 0.5) / m13->numbins; 
+	if (!cpuDalitz(m12->value, m13->value, _mD0, piZeroMass, piPlusMass, piPlusMass)) continue;
+	for (int l = half; l < dtime->numbins; l += division) {
+	  dtime->value = dtime->lowerlimit + (dtime->upperlimit - dtime->lowerlimit)*(l + 0.5) / dtime->numbins; 
+	  eventNumber->value = evtCounter; 
+	  evtCounter++;
+	  currData.addEvent(); 
+	}
+      }
+    }
+    int k = 0;
+//    for (k = 0; k < sigma->numbins; ++k) {
+      sigma->value = sigma->lowerlimit + (sigma->upperlimit - sigma->lowerlimit)*(k + 0.5) / sigma->numbins; 
+
+//      if (0 == k % 10) std::cout << "sigma iteration " << half << " " << k << std::endl; 
+      currData.setValueForAllEvents(sigma); 
+      overallSignal->setData(&currData); 
+
+//      if (0 == k) {
+	if (signalDalitz) signalDalitz->setDataSize(currData.getNumEvents());
+      std::vector<std::vector<double> > pdfValues;
+      overallSignal->getCompProbsAtDataPoints(pdfValues);
+    
+      for (unsigned int j = 0; j < pdfValues[0].size(); ++j) {
+	double currTime = currData.getValue(dtime, j);
+	dtime_pdf_hist.Fill(currTime, pdfValues[0][j]);
+
+	totalPdf += pdfValues[0][j]; 
+      }
+
+      // If PDF doesn't depend on sigma, don't project from that dimension. 
+//      if (!dependsOnSigma) break; 
+//    }
   }
 
+  for (int i = 1; i <= dtime->numbins; ++i) {
+    dtime_pdf_hist.SetBinContent(i, dtime_pdf_hist.GetBinContent(i) * totalDat / totalPdf);
+  }*/
+
   foo->cd(); 
-  dtime_dat_hist.Draw("p"); 
+  for (int i=0;i<m23Slices;i++){
+  sigma_dat_hist[i]->Draw("ep"); 
+  sigma_pdf_hist[i]->Draw("lsame"); 
+  sigma_bg_2_hist[i]->Add(sigma_bg_3_hist[i]);
+  sigma_bg_2_hist[i]->Add(sigma_bg_4_hist[i]);
+  sigma_bg_2_hist[i]->SetLineStyle(2);
+  sigma_bg_2_hist[i]->Draw("lsame");
+  sigma_sig_hist[i]->SetLineStyle(3);
+  sigma_sig_hist[i]->Draw("lsame");
+  sprintf(strbuffer, "%i", i);
+  TText slicenum;
+  slicenum.DrawTextNDC(0.2, 0.8, strbuffer);
+  
+  sprintf(strbuffer, "%s/sigma_fit_%i.pdf", plotdir.c_str(), i);
+  foo->SaveAs(strbuffer); 
+  foo->SetLogy(true);
+  sprintf(strbuffer, "%s/sigma_fit_log_%i.pdf", plotdir.c_str(), i);
+  foo->SaveAs(strbuffer); 
+  foo->SetLogy(false);
+  }
+  dtime_dat_hist.Draw("ep"); 
   dtime_pdf_hist.Draw("lsame"); 
-  dtime_bg_hist.SetLineStyle(2);
-  dtime_bg_hist.Draw("lsame");
+  dtime_bg_2_hist.Add(&dtime_bg_3_hist);
+  dtime_bg_2_hist.Add(&dtime_bg_4_hist);
+  dtime_bg_2_hist.SetLineStyle(2);
+  dtime_bg_2_hist.Draw("lsame");
   dtime_sig_hist.SetLineStyle(3);
   dtime_sig_hist.Draw("lsame");
 
-  foo->SaveAs((plotdir + "/dtime_fit.png").c_str()); 
+  foo->SaveAs((plotdir + "/dtime_fit.pdf").c_str()); 
   foo->SetLogy(true);
-  foo->SaveAs((plotdir + "/dtime_fit_log.png").c_str()); 
+  foo->SaveAs((plotdir + "/dtime_fit_log.pdf").c_str()); 
+  foo->SetLogy(false);
+  m12_dat_hist.Draw("ep"); 
+  m12_pdf_hist.Draw("lsame"); 
+  m12_bg_2_hist.Add(&m12_bg_3_hist);
+  m12_bg_2_hist.Add(&m12_bg_4_hist);
+  m12_bg_2_hist.SetLineStyle(2);
+  m12_bg_2_hist.Draw("lsame");
+  m12_sig_hist.SetLineStyle(3);
+  m12_sig_hist.Draw("lsame");
+
+  foo->SaveAs((plotdir + "/m12_fit.pdf").c_str()); 
+  foo->SetLogy(true);
+  foo->SaveAs((plotdir + "/m12_fit_log.pdf").c_str()); 
+  foo->SetLogy(false);
+  m13_dat_hist.Draw("ep"); 
+  m13_pdf_hist.Draw("lsame"); 
+  m13_bg_2_hist.Add(&m13_bg_3_hist);
+  m13_bg_2_hist.Add(&m13_bg_4_hist);
+  m13_bg_2_hist.SetLineStyle(2);
+  m13_bg_2_hist.Draw("lsame");
+  m13_sig_hist.SetLineStyle(3);
+  m13_sig_hist.Draw("lsame");
+
+  foo->SaveAs((plotdir + "/m13_fit.pdf").c_str()); 
+  foo->SetLogy(true);
+  foo->SaveAs((plotdir + "/m13_fit_log.pdf").c_str()); 
   foo->SetLogy(false);
 }
 
-
-void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixfit/") {
+void makeDalitzPlots (GooPdf* overallSignal, string plotdir, bool usedtimebin) {
   foo->cd(); 
 
   TH1F dtime_dat_hist("dtime_dat_hist", "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
@@ -1744,11 +2481,23 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
   TH1F* bkg3_data[6];
   double num_sigma_dat[6];
   double num_sigma_pdf[6];
+  char histtitlebuff[256];
+  std::string varname = "m^{2}(#pi^{+}#pi^{-})";
+  std::string varunit = "GeV";
+  if (usedtimebin){
+      varname = "|t|";
+      varunit = "ps";
+  }
   for (int i = 0; i < 6; ++i) {
-    sprintf(strbuffer, "bkg_sigma_pdf_%i", i);
+    sprintf(strbuffer, "bkg_sigma_pdf_%s%i", usedtimebin?"dtime":"",i);
     bkg3_pdfs[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);
     sprintf(strbuffer, "bkg_sigma_dat_%i", i);
-    bkg3_data[i] = new TH1F(strbuffer, "", sigma->numbins, sigma->lowerlimit, sigma->upperlimit);      
+    float min = i*0.5, max = (i+1)*0.5;
+    if (usedtimebin) { min = i==0?0:dtime_bins[i-1]; max = i==5?0.8:dtime_bins[i]; }
+    if (i==0) sprintf(histtitlebuff, "%s < %.2f %s", varname.c_str(), max, varunit.c_str());
+    else if (i==5) sprintf(histtitlebuff, "%s > %.2f %s", varname.c_str(), min, varunit.c_str());
+    else sprintf(histtitlebuff, "%.2f < %s < %.2f %s", min, varname.c_str(), max, varunit.c_str());
+    bkg3_data[i] = new TH1F(strbuffer, histtitlebuff, sigma->numbins, sigma->lowerlimit, sigma->upperlimit);      
     
     num_sigma_dat[i] = 0;
     num_sigma_pdf[i] = 0;
@@ -1757,7 +2506,8 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
     bkg3_data[i]->SetMarkerStyle(8); 
     bkg3_data[i]->SetMarkerSize(1.2);
     bkg3_data[i]->GetXaxis()->SetTitle("Decay time error [ps]");
-    bkg3_data[i]->GetYaxis()->SetTitle("Events / 8 fs"); 
+    sprintf(strbuffer, "Events / %d fs", int(1e3*bkg3_data[i]->GetBinWidth(1)));
+    bkg3_data[i]->GetYaxis()->SetTitle(strbuffer); 
     
     bkg3_pdfs[i]->SetStats(false); 
     bkg3_pdfs[i]->SetLineColor(kBlue); 
@@ -1790,7 +2540,9 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
 
     totalDat++; 
 
-    int m23bin = (int) floor(currm23 / 0.5);
+    int m23bin = 0;
+    if (!usedtimebin) m23bin = (int) floor(currm23 / 0.5);
+    else m23bin = getdtimebin(currTime);
     bkg3_data[m23bin]->Fill(currSigma);
     num_sigma_dat[m23bin]++; 
   }
@@ -1816,7 +2568,6 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
   
   //overallSignal->setDebugMask(1); 
   
-  wBkg1->value = 0;
   const int division = 2; 
   for (int half = 0; half < division; ++half) {
     std::vector<Variable*> vars;
@@ -1864,6 +2615,7 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
         
       std::vector<std::vector<double> > pdfValues;
       overallSignal->getCompProbsAtDataPoints(pdfValues);
+      std::cout<<"getCompProbsAtDataPoints here."<<std::endl;
     
       for (unsigned int j = 0; j < pdfValues[0].size(); ++j) {
 	double currTime = currData.getValue(dtime, j);
@@ -1885,7 +2637,9 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
 	dalitzp0_pdf_hist.Fill(currm12, currm23, pdfValues[0][j]);
 	dalitzm0_pdf_hist.Fill(currm13, currm23, pdfValues[0][j]);
 
-	int currM23Bin = (int) (currm23 / 0.5);
+	int currM23Bin = 0;
+    if (!usedtimebin) currM23Bin = (int) floor(currm23 / 0.5);
+    else currM23Bin = getdtimebin(currTime);
 	bkg3_pdfs[currM23Bin]->Fill(currSigma, pdfValues[0][j]);
 	num_sigma_pdf[currM23Bin] += pdfValues[0][j]; 
 
@@ -1937,14 +2691,14 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
     }
   }
 
-  ChisqInfo* chisq = getAdaptiveChisquare(&dalitzpm_dat_hist, &dalitzpm_pdf_hist);
+/*  ChisqInfo* chisq = getAdaptiveChisquare(&dalitzpm_dat_hist, &dalitzpm_pdf_hist);
 
   std::cout << "Chisquare: " <<  chisq->chisq << " / " << chisq->dof << std::endl; 
   foodal->cd(); 
   foodal->SetLogz(false);
   chisq->contribPlot->SetStats(false); 
   chisq->contribPlot->Draw("colz"); 
-  foodal->SaveAs((plotdir + "/chisq.png").c_str()); 
+  foodal->SaveAs((plotdir + "/chisq.png").c_str()); */
   foo->cd(); 
 
   coarseBin(dalitzpm_pdf_hist, 2); 
@@ -1962,6 +2716,7 @@ void makeDalitzPlots (GooPdf* overallSignal, string plotdir = "./plots_from_mixf
   foo->SetLogy(false);
 
   for (int i = 0; i < 6; ++i) {
+  std::cout << "Drawing: " <<  bkg3_pdfs[i]->GetName() << std::endl; 
     if (!dependsOnSigma) {
       bkg3_data[i]->Draw("p");
     }
@@ -2169,7 +2924,7 @@ GooPdf* makeSigmaHists () {
   for (int i = 0; i < m23Slices; ++i) sigmaHists[i] = new BinnedDataSet(sigma); 
 
   std::ifstream reader;
-  readWrapper(reader,"./dataFiles/signalMC_truth_mm_0.txt");
+  reader.open("./dataFiles/signalMC_truth_mm_0.txt");
   std::string buffer;
   while (!reader.eof()) {
     reader >> buffer;
@@ -2206,21 +2961,33 @@ GooPdf* makeSigmaHists () {
   return new MappedPdf("signalSigmaHist", m23_composite, jsuList); 
 }
 
-GooPdf* makeBkg_sigma_strips (int bkgnum) {
-  GooPdf* m23_composite = make_m23_transform(); 
+GooPdf* makeBkg_sigma_strips (int bkgnum, bool usedtimebin ) {
+  GooPdf* bin_composite = NULL;
+  if (!usedtimebin) bin_composite = make_m23_transform(); 
+  else{
+      vector <double> binlimitlist;
+      for (int i=0;i<dtimeSlices-1;i++)
+          binlimitlist.push_back(dtime_bins[i]);
+      bin_composite = new VariableBinTransform1DPdf("dtime_binMap", dtime, binlimitlist); 
+  }
   
   vector<GooPdf*> jsuList;
   vector<ConvolutionPdf*> convList; 
   bool useShare = false; 
-  for (int i = 0; i < m23Slices; ++i) {
-    sprintf(strbuffer, "bkg%i_sigma_slice%i_expalpha", bkgnum, i);
+  string slname = usedtimebin?"dtimeslice":"slice";
+  const unsigned int nSlices = usedtimebin?dtimeSlices:m23Slices;
+  for (int i = 0; i < nSlices; ++i) {
+    sprintf(strbuffer, "bkg%i_sigma_%s%i_expalpha", bkgnum, slname.c_str(), i);
     Variable* exp_alpha  = new Variable(strbuffer, 7.50, 0.10, 0, 10.00);
-    sprintf(strbuffer, "bkg%i_sigma_slice%i_gauss_meana", bkgnum, i);
+    if (bkgnum == 0&&!doSigSigmaFit) exp_alpha->fixed = true;
+    sprintf(strbuffer, "bkg%i_sigma_%s%i_gauss_meana", bkgnum, slname.c_str(), i);
     Variable* g_meana = new Variable(strbuffer, 0.20, 0.01, 0.00, 0.80);
-    sprintf(strbuffer, "bkg%i_sigma_slice%i_gauss_sigma", bkgnum, i);
+    if (bkgnum == 0&&!doSigSigmaFit) g_meana->fixed = false;
+    sprintf(strbuffer, "bkg%i_sigma_%s%i_gauss_sigma", bkgnum, slname.c_str(), i);
     Variable* g_sigma = new Variable(strbuffer, 0.03, 0.01, 0.01, 0.20);
+    if (bkgnum == 0&&!doSigSigmaFit) g_sigma->fixed = true;
 
-    sprintf(strbuffer, "bkg%i_sigma_slice%i_conv", bkgnum, i);
+    sprintf(strbuffer, "bkg%i_sigma_%s%i_conv", bkgnum, slname.c_str(), i);
     ExpGausPdf* expfunc = new ExpGausPdf(strbuffer, sigma, g_meana, g_sigma, exp_alpha); 
     jsuList.push_back(expfunc);
   }
@@ -2233,7 +3000,7 @@ GooPdf* makeBkg_sigma_strips (int bkgnum) {
   }
 
   sprintf(strbuffer, "bkg%i_sigma_map", bkgnum);
-  return new MappedPdf(strbuffer, m23_composite, jsuList); 
+  return new MappedPdf(strbuffer, bin_composite, jsuList); 
 }
 
 void createWeightHistogram () {
@@ -2281,7 +3048,9 @@ GooPdf* makeOverallSignal () {
   binEffData = new BinnedDataSet(lvars); 
   createWeightHistogram();
   std::cout << "Loading efficiency data\n"; 
-  loadDataFile("./dataFiles/efficiency_flat.txt", &effdata); 
+  loadDataFile("./dataFiles/efficiency_flat.txt", &effdata,1); 
+//  loadDataFile("./dataFiles/efficiency_flat.txt", &effdata); 
+  std::cout << " with entries: "<<effdata->getNumEvents()<<std::endl;
 
   if (saveEffPlot) {
     foodal->cd();
@@ -2294,13 +3063,23 @@ GooPdf* makeOverallSignal () {
 
   GooPdf* eff = 0;
   // Polynomial version
-  if (polyEff) eff = makeEfficiencyPoly();  
+  if (polyEff){
+      eff = makeEfficiencyPoly();  
+      eff->setData(binEffData);
+      FitManager effpdf(eff);
+      effpdf.fit();
+      effpdf.getMinuitValues();
+  }
   // SmoothHistogram version
-  else eff = makeEfficiencyPdf();
-  eff->setData(effdata); 
-  FitManager effpdf(eff); 
-  effpdf.fit();
-  effpdf.getMinuitValues();
+  else {
+      eff = makeEfficiencyPdf();
+      if (effdata->getNumEvents()){
+          eff->setData(effdata); 
+          FitManager effpdf(eff); 
+          effpdf.fit();
+          effpdf.getMinuitValues();
+      }
+  }
   eff->setParameterConstantness(true); 
   binEffData = 0; 
   delete effdata; effdata = 0; 
@@ -2338,7 +3117,7 @@ GooPdf* makeOverallSignal () {
   */
   sprintf(strbuffer, "signal_sigma_%islices_pdf.txt", m23Slices);
   readFromFile(sig0_jsugg, strbuffer);
-  sig0_jsugg->setParameterConstantness(true); 
+  //sig0_jsugg->setParameterConstantness(true); 
    
   comps.clear(); 
   comps.push_back(signalDalitz);
@@ -2681,7 +3460,7 @@ GooPdf* makeBkg3_sigma () {
 
   Variable* bkg3_sigma_g1_meana = new Variable("bkg3_sigma_g1_meana", 0.35, 0.01, 0.10, 0.50);   
   Variable* bkg3_sigma_g1_sigma = new Variable("bkg3_sigma_g1_sigma", 0.10, 0.01, 0.01, 0.55);
-  Variable* bkg3_sigma_g2_meana = new Variable("bkg3_sigma_g2_meana", 0.20, 0.01, 0.01, 1.50);   
+  Variable* bkg3_sigma_g2_meana = new Variable("bkg3_sigma_g2_meana", 0.20, 0.01, 0.0001, 1.50);   
   Variable* bkg3_sigma_g2_sigma = new Variable("bkg3_sigma_g2_sigma", 0.10, 0.01, 0.001, 0.15);  
   Variable* bkg3_sigma_g2_gamma = new Variable("bkg3_sigma_g2_gamma", -2.00, 1.00, -10, 10); 
   Variable* bkg3_sigma_g2_delta = new Variable("bkg3_sigma_g2_delta", 2, 0.10, 0.50, 5.00);
@@ -2819,7 +3598,7 @@ GooPdf* makeExpGausTimePdf (int bkg) {
 } 
 
 
-GooPdf* makeBkg2DalitzPdf (bool fixem = true) {
+GooPdf* makeBkg2DalitzPdf (bool fixem, bool loadsigmapdf) {
   if (!kzero_veto) makeKzeroVeto(); 
 
   GooPdf* bkg2_dalitz = 0; 
@@ -2907,7 +3686,7 @@ GooPdf* makeBkg2DalitzPdf (bool fixem = true) {
 						   0,
 						   fixedRhoMass,
 						   fixedRhoWidth,
-						   0, // Incoherent rho has effective spin 0. 
+						   (unsigned int)0, // Incoherent rho has effective spin 0. 
 						   PAIR_23);
     incoherent_rho0s->resonances.push_back(bkg2_incRho0); 
     
@@ -2916,7 +3695,7 @@ GooPdf* makeBkg2DalitzPdf (bool fixem = true) {
 						   0,
 						   fixedRhoMass,
 						   fixedRhoWidth,
-						   0,
+						   (unsigned int)0,
 						   PAIR_12);
     incoherent_rho0s->resonances.push_back(bkg2_incRhoP); 
 
@@ -2925,7 +3704,7 @@ GooPdf* makeBkg2DalitzPdf (bool fixem = true) {
 						   0,
 						   fixedRhoMass,
 						   fixedRhoWidth,
-						   0,
+						   (unsigned int)0,
 						   PAIR_13);
     incoherent_rho0s->resonances.push_back(bkg2_incRhoM); 
 
@@ -2952,6 +3731,13 @@ GooPdf* makeBkg2DalitzPdf (bool fixem = true) {
   }
   else if (Histogram == bkg2Model) {
     bkg2_dalitz = makeBackgroundHistogram(2); 
+/*  DecayInfo* dtop0pp = new DecayInfo();
+  dtop0pp->motherMass  = _mD0; 
+  dtop0pp->daug1Mass  = piZeroMass;
+  dtop0pp->daug2Mass  = piPlusMass;
+  dtop0pp->daug3Mass  = piPlusMass;
+  dtop0pp->meson_radius  = mesonRad;   
+  bkg2_dalitz= new FlatDalitzPlotPdf("flatbkgPdf", m12, m13, dtop0pp);*/
   }
   else if (Sideband == bkg2Model) {
     comps.clear();
@@ -2975,14 +3761,25 @@ GooPdf* makeBkg2DalitzPdf (bool fixem = true) {
   }
 
   GooPdf* bkg2_dtime = 0;
+  
+  if (loadsigmapdf) {
   if (gaussBkgTime) bkg2_dtime = makeGaussianTimePdf(2); 
   else bkg2_dtime = makeExpGausTimePdf(2); 
-
-  //bkg2_jsugg = sig0_jsugg; // Mikhail uses same sigma distribution for everything. 
+//  bkg2_jsugg = sig0_jsugg; // Mikhail uses same sigma distribution for everything. 
   // Separate sigma_t distribution 
   //bkg2_jsugg = makeBkg2_sigma();
-  bkg2_jsugg = makeBkg_sigma_strips(2);
-  bkg2_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); 
+  bkg2_jsugg = makeBkg_sigma_strips(2, true);
+//  bkg2_jsugg = makeBkg_sigma_strips(2);
+/*  Variable* sig_sigma_MPV = new Variable("toySigSigmaMPVBkg2", toySigSigmaMPV, 0.01, 0.0, 0.8);
+  Variable* sig_sigma_sigma = new Variable("toySigSigmaSigmaBkg2", toySigSigmaSigma, 0.01, 0.01, 0.20);
+  bkg2_jsugg = new LandauPdf("bkg2_jsugg", sigma, sig_sigma_MPV, sig_sigma_sigma );*/
+/*  Variable* sig_sigma_MPV = new Variable("toySigSigmaMPVBkg2", 0.200602, 0.1, 0.001, 0.8);
+  Variable* sig_sigma_sigma = new Variable("toySigSigmaSigmaBkg2", 0.0527114, 0.01, 0.01, 0.20);
+  Variable* sig_sigma_alpha = new Variable("toySigSigmaAlphaBkg2", 3.39720, 0.01, 0.01, 10);
+  bkg2_jsugg = new ExpGausPdf("bkg2_jsugg", sigma, sig_sigma_MPV, sig_sigma_sigma, sig_sigma_alpha );*/
+  bkg2_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); }
+  else bkg2_dtime = makeBackgroundDTimeHistogram(2); 
+  // bkg2_dtime->addSpecialMask(PdfBase::ForceSeparateNorm);
 
   // Finally create overall product.
   comps.clear();
@@ -2991,7 +3788,7 @@ GooPdf* makeBkg2DalitzPdf (bool fixem = true) {
   //incsum2->setDebugMask(1);
   comps.push_back(bkg2_dalitz); 
   comps.push_back(bkg2_dtime);
-  comps.push_back(bkg2_jsugg);
+  if (loadsigmapdf) comps.push_back(bkg2_jsugg);
 
   GooPdf* ret = new ProdPdf("bkg2_total", comps); 
   if (fixem) ret->setParameterConstantness(true);
@@ -3014,7 +3811,7 @@ GooPdf* makeBkg3Eff () {
   m13->numbins = 30;
   BinnedDataSet* bkg3_eff_data = new BinnedDataSet(weights); 
   std::ifstream reader;
-  readWrapper(reader,"./dataFiles/efficiency_bkg3_flat.txt"); 
+  reader.open("./dataFiles/efficiency_bkg3_flat.txt"); 
   std::string buffer;
   while (!reader.eof()) {
     reader >> buffer;
@@ -3046,11 +3843,74 @@ GooPdf* makeBkg3Eff () {
   return ret; 
 }
 
+SmoothHistogramPdf* makeBackgroundDTimeHistogram(int bkgnum, string overridename) {
+  std::ifstream reader;
+  sprintf(strbuffer, "./dataFiles/bkgDalitz_%i.txt", bkgnum); 
+  if (overridename != "") sprintf(strbuffer, "%s", overridename.c_str()); 
+  reader.open(strbuffer);
+  std::string buffer;
+  while (!reader.eof()) {
+    reader >> buffer;
+    if (buffer == "====") break; 
+    std::cout << buffer; 
+  }
+
+  weights.clear(); 
+  weights.push_back(dtime);
+  weights.push_back(sigma); 
+  BinnedDataSet* bkg_binned_data = new BinnedDataSet(weights); 
+
+  double dummy = 0; 
+  while (!reader.eof()) {
+    reader >> dummy;
+    reader >> dummy;      // m23, m(pi+ pi-), called m12 in processToyRoot convention. 
+    reader >> dummy; // Already swapped according to D* charge. m12 = m(pi+pi0)
+    reader >> dummy;
+    reader >> dummy;
+    reader >> dummy;
+    reader >> dummy;
+    reader >> dtime->value;
+    reader >> sigma->value;
+
+    // Don't need the rest. 
+    for (int i = 0; i < 11; ++i) reader >> dummy; 
+    if (dtime->value < dtime->lowerlimit) continue;
+    if (dtime->value > dtime->upperlimit) continue; 
+    if (sigma->value > sigma->upperlimit) continue;
+
+    bkg_binned_data->addEvent(); 
+
+    //std::cout << m12->value << " " << m13->value << std::endl; 
+  }
+  reader.close();
+
+  std::cout << "Read " << bkg_binned_data->numEvents() << " events for background " << bkgnum << std::endl; 
+  sprintf(strbuffer, "bkg%i_dtime_smoothing", bkgnum); 
+  Variable* smoothing = new Variable(strbuffer, 1);
+
+  if ((-1 != bkgHistRandSeed) && ((3 == bkgnum) || (4 == bkgnum))) {
+    std::cout << "Shuffling background " << bkgnum << " histogram with random seed " << bkgHistRandSeed << std::endl; 
+    TRandom donram(bkgHistRandSeed); 
+    for (unsigned int bin = 0; bin < bkg_binned_data->getNumBins(); ++bin) {
+      double events = bkg_binned_data->getBinContent(bin); 
+      if (1 > events) continue; 
+      double newEvents = -1;
+      while (0 > newEvents) newEvents = donram.Gaus(events, sqrt(events)); 
+      bkg_binned_data->setBinContent(bin, newEvents); 
+    }
+  }
+
+  sprintf(strbuffer, "bkg%i_dtime2D", bkgnum);
+  SmoothHistogramPdf* bkg_dtime2D = new SmoothHistogramPdf(strbuffer, bkg_binned_data, smoothing);
+  //bkg_dalitz->setDebugMask(1); 
+  return bkg_dtime2D; 
+}
+
 SmoothHistogramPdf* makeBackgroundHistogram (int bkgnum, string overridename) {
   std::ifstream reader;
   sprintf(strbuffer, "./dataFiles/bkgDalitz_%i.txt", bkgnum); 
   if (overridename != "") sprintf(strbuffer, "%s", overridename.c_str()); 
-  readWrapper(reader,strbuffer);
+  reader.open(strbuffer);
   std::string buffer;
   while (!reader.eof()) {
     reader >> buffer;
@@ -3077,12 +3937,13 @@ SmoothHistogramPdf* makeBackgroundHistogram (int bkgnum, string overridename) {
 
     //std::cout << m12->value << " " << m13->value << std::endl; 
   }
+  reader.close();
 
   std::cout << "Read " << bkg_binned_data->numEvents() << " events for background " << bkgnum << std::endl; 
   sprintf(strbuffer, "bkg%i_dalitz_smoothing", bkgnum); 
   Variable* smoothing = new Variable(strbuffer, 1);
 
-  if ((-1 != bkgHistRandSeed) && (3 == bkgnum) || (4 == bkgnum)) {
+  if ((-1 != bkgHistRandSeed) && ((3 == bkgnum) || (4 == bkgnum))) {
     std::cout << "Shuffling background " << bkgnum << " histogram with random seed " << bkgHistRandSeed << std::endl; 
     TRandom donram(bkgHistRandSeed); 
     for (unsigned int bin = 0; bin < bkg_binned_data->getNumBins(); ++bin) {
@@ -3370,7 +4231,7 @@ GooPdf* makeBackground4DalitzParam () {
 						   0,
 						   fixedRhoMass,
 						   fixedRhoWidth,
-						   0, // These rhos are spin 0.
+						   (unsigned int)0, // These rhos are spin 0.
 						   PAIR_23);
   incoherent_rho0s->resonances.push_back(bkg4_incRho0); 
 
@@ -3379,7 +4240,7 @@ GooPdf* makeBackground4DalitzParam () {
 						   0,
 						   fixedRhoMass,
 						   fixedRhoWidth,
-						   0,
+						   (unsigned int)0,
 						   PAIR_12);
   incoherent_rho0s->resonances.push_back(bkg4_incRhoP); 
 
@@ -3388,7 +4249,7 @@ GooPdf* makeBackground4DalitzParam () {
 						   0,
 						   fixedRhoMass,
 						   fixedRhoWidth,
-						   0,
+						   (unsigned int)0,
 						   PAIR_13); 
   incoherent_rho0s->resonances.push_back(bkg4_incRhoM); 
 
@@ -3413,7 +4274,7 @@ GooPdf* makeBackground4DalitzParam () {
   return bkg4_dalitz;
 }
 
-GooPdf* makeBkg3DalitzPdf (bool fixem = true) {
+GooPdf* makeBkg3DalitzPdf (bool fixem, bool loadsigmapdf) {
   if (!kzero_veto) makeKzeroVeto(); 
   comps.clear(); 
   weights.clear();
@@ -3428,23 +4289,41 @@ GooPdf* makeBkg3DalitzPdf (bool fixem = true) {
   GooPdf* bkg3_dalitz = 0;
   if (useBackground3Hist) bkg3_dalitz = makeBackgroundHistogram(3);
   else bkg3_dalitz = makeBackground3DalitzParam();
-  //bkg3_dalitz->setDebugMask(1); 
+  ////bkg3_dalitz->setDebugMask(1); 
+  // TEST ONLY
+/*  DecayInfo* dtop0pp = new DecayInfo();
+  dtop0pp->motherMass  = _mD0; 
+  dtop0pp->daug1Mass  = piZeroMass;
+  dtop0pp->daug2Mass  = piPlusMass;
+  dtop0pp->daug3Mass  = piPlusMass;
+  dtop0pp->meson_radius  = mesonRad;   
+  bkg3_dalitz= new FlatDalitzPlotPdf("flatbkgPdf", m12, m13, dtop0pp);*/
+  // TEST ONLY
 
   GooPdf* bkg3_dtime = 0;
+/*    Variable* g_mean = new Variable("g_mean", toyBkgTimeMean, 0.01, -0.2,0.5);
+    Variable* g_sigma = new Variable("g_sigma", toyBkgTimeRMS, 0.01, 0.15, 1.5);
+    bkg3_dtime = new GaussianPdf("flatbkg_timepdf", dtime, g_mean, g_sigma);*/
+  if (loadsigmapdf){
   if (gaussBkgTime) bkg3_dtime = makeGaussianTimePdf(3); 
   else bkg3_dtime = makeExpGausTimePdf(3); 
-
-
-  //bkg3_jsugg = makeBkg3_sigma(); 
+//  bkg3_jsugg = makeBkg3_sigma(); 
   //bkg3_jsugg = sig0_jsugg; // Mikhail uses same sigma distribution for everything. 
-  bkg3_jsugg = makeBkg_sigma_strips(3);
-  bkg3_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); 
+/*    Variable* sig_sigma_MPV = new Variable("toySigSigmaMPV", toySigSigmaMPV, 0.01, 0.0, 0.8);
+    Variable* sig_sigma_sigma = new Variable("toySigSigmaSigma", toySigSigmaSigma, 0.01, 0.01, 0.20);
+    bkg3_jsugg = new LandauPdf("bkg3_jsugg", sigma, sig_sigma_MPV, sig_sigma_sigma );*/
+    bkg3_jsugg = makeBkg_sigma_strips(3);
+    bkg3_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); 
   // Otherwise ProdPdf tries to use the default overall integration,
   // because bkg3_jsugg depends on m12, m13 due to the striping, and that has
   // disastrous results for bkg3_dalitz. Note that this doesn't, actually, 
   // contradict the ForceCommonNorm above, even though it looks like it should, 
   // because CommonNorm applies to the AddPdf while SeparateNorm
   // applies to the ProdPdf. 
+  }
+  else {
+      bkg3_dtime = makeBackgroundDTimeHistogram(3); 
+  }
 
 
   comps.clear();
@@ -3453,7 +4332,7 @@ GooPdf* makeBkg3DalitzPdf (bool fixem = true) {
   //incsum3->setDebugMask(1); 
   comps.push_back(bkg3_dtime);
   //bkg3_dtime->setDebugMask(1); 
-  //comps.push_back(bkg3_jsugg); 
+  //if (loadsigmapdf) comps.push_back(bkg3_jsugg); 
   //sig0_jsugg->setDebugMask(1); 
 
   GooPdf* ret = new ProdPdf("bkg3_total", comps); 
@@ -3461,7 +4340,7 @@ GooPdf* makeBkg3DalitzPdf (bool fixem = true) {
   return ret;
 }
 
-GooPdf* makeBkg4DalitzPdf (bool fixem = true) {
+GooPdf* makeBkg4DalitzPdf (bool fixem, bool loadsigmapdf) {
   if (!kzero_veto) makeKzeroVeto(); 
   comps.clear(); 
   weights.clear();
@@ -3471,6 +4350,7 @@ GooPdf* makeBkg4DalitzPdf (bool fixem = true) {
   else bkg4_dalitz = makeBackground4DalitzParam();
 
   GooPdf* bkg4_dtime = 0;
+  if (loadsigmapdf){
   if (gaussBkgTime) bkg4_dtime = makeGaussianTimePdf(4); 
   else bkg4_dtime = makeExpGausTimePdf(4); 
 
@@ -3479,67 +4359,77 @@ GooPdf* makeBkg4DalitzPdf (bool fixem = true) {
   //bkg4_jsugg = sig0_jsugg; // Mikhail uses same sigma distribution for everything. 
   bkg4_jsugg = makeBkg_sigma_strips(4);
   bkg4_jsugg->addSpecialMask(PdfBase::ForceSeparateNorm); // See comments to bkg3_jsugg. 
+  }
+  else {
+      bkg4_dtime = makeBackgroundDTimeHistogram(3); 
+  }
 
   comps.clear();
   comps.push_back(bkg4_dalitz); 
   comps.push_back(bkg4_dtime);
-  //comps.push_back(bkg4_jsugg);
+  //if (loadsigmapdf) comps.push_back(bkg4_jsugg); 
 
   ProdPdf* ret = new ProdPdf("bkg4_total", comps); 
   if (fixem) ret->setParameterConstantness(true);
   return ret;
 }
-
-
-void runCanonicalFit (char* fname, bool noPlots = true) {
+void runCocktailFit (char* fname, bool noPlots = true) {
   makeFullFitVariables(); 
+  delete wBkg1; wBkg1 = NULL;
   if (mdslices > 1) massd0 = new Variable("massd0", 1.8654 + 0.0075*md0_lower_window + md0offset, 1.8654 + 0.0075*md0_upper_window + md0offset);
   std::cout << "Loading events from " << fname << std::endl;
-  loadDataFile(fname);   
+  loadSignalMCFile(fname, toySigFraction);   
+//  loadDataFile(fname);  
 
   std::cout << "Creating overall signal PDF\n"; 
   GooPdf* overallSignal = makeOverallSignal(); 
 
-  TRandom donram(blindSeed); // The rain and the sun! 
-  if (0 != blindSeed) {
-    ptr_to_xmix->blind = donram.Gaus(0, 0.005);
-    ptr_to_ymix->blind = donram.Gaus(0, 0.005);
-  }
   //overallSignal->setDebugMask(1); 
-
-
   int oldBins1 = m12->numbins;
   int oldBins2 = m13->numbins;
-  // Too fine a binning here leads to bad results due to fluctuations. 
-  m12->numbins = bkgHistBins;
-  m13->numbins = bkgHistBins;
-  std::cout << "Creating background PDFs\n"; 
-  GooPdf* bkg2Pdf = makeBkg2DalitzPdf(); 
-  GooPdf* bkg3Pdf = makeBkg3DalitzPdf(); 
-  GooPdf* bkg4Pdf = makeBkg4DalitzPdf(); 
-  m12->numbins = oldBins1;
-  m13->numbins = oldBins2; 
+  int oldDTimeBins = dtime->numbins;
+  int oldSigmaBins = sigma->numbins;
 
-  getBackgroundFile(2);
-  std::cout << "Reading bkg2 parameters from " << strbuffer << std::endl;
-  readFromFile(bkg2Pdf, strbuffer);
-  // NB, background 3 and 4 params do not actually work. Only hists.
-  getBackgroundFile(3);
-  std::cout << "Reading bkg3 parameters from " << strbuffer << std::endl;
-  readFromFile(bkg3Pdf, strbuffer);
-  getBackgroundFile(4);
-  std::cout << "Reading bkg4 parameters from " << strbuffer << std::endl;
-  readFromFile(bkg4Pdf, strbuffer);
-
-  bkg2Pdf->setParameterConstantness(true);
-  bkg3Pdf->setParameterConstantness(true);
-  bkg4Pdf->setParameterConstantness(true);
-
-  //bkg3Pdf->setDebugMask(1); 
-
-  int eventSize = massd0 ? 11 : 10; 
+//  int eventSize = massd0 ? : 5; 
+  int eventSize = massd0 ? 11-4 : 10-4; 
+  if (wBkg1) eventSize ++;
+  if (iBkg<0) eventSize--;
   std::cout << "Setting data size " << eventSize << std::endl; 
   signalDalitz->setDataSize(data->getNumEvents(), eventSize); // Must take into account event weights! 
+  GooPdf* bkgPdf = NULL;
+/*  bkgPdf = makeFlatBkgDalitzPdf();
+  bkgPdf->setParameterConstantness(true);*/
+  m12->numbins = bkgHistBins;
+  m13->numbins = bkgHistBins;
+  dtime->numbins = 50;
+  sigma->numbins = 50;
+  switch(iBkg){
+      case 2:
+          bkgPdf = makeBkg2DalitzPdf(true, true);
+          break;
+      case 3:
+          bkgPdf = makeBkg3DalitzPdf(true, true);
+          break;
+      case 4:
+          bkgPdf = makeBkg4DalitzPdf();
+          break;
+      case 0:
+          bkgPdf = makeFlatBkgDalitzPdf(true,true);
+          break;
+      default:
+          bkgPdf = NULL;
+  }
+  m12->numbins = oldBins1;
+  m13->numbins = oldBins2; 
+  dtime->numbins = oldDTimeBins;
+  sigma->numbins = oldSigmaBins;
+  if (iBkg>0){
+//      getBackgroundFile(iBkg, true);
+      getBackgroundFile(iBkg);
+      std::cout << "Reading bkg parameters from " << strbuffer << std::endl;
+      readFromFile(bkgPdf, strbuffer);
+  }
+  if (bkgPdf) bkgPdf->setParameterConstantness(true);
   //bkg2Pdf->setDebugMask(1); 
   if (incsum1) incsum1->setDataSize(data->getNumEvents(), eventSize); 
   if (incsum2) incsum2->setDataSize(data->getNumEvents(), eventSize); 
@@ -3550,40 +4440,31 @@ void runCanonicalFit (char* fname, bool noPlots = true) {
   if (incsum6) incsum6->setDataSize(data->getNumEvents(), eventSize); 
   
   std::cout << "Creating overall PDF\n"; 
+  GooPdf* overallPdf = NULL;
+  if (bkgPdf){
   std::vector<Variable*> evtWeights;
   evtWeights.push_back(wSig0);
-  evtWeights.push_back(wBkg2); 
-  evtWeights.push_back(wBkg3); 
-  evtWeights.push_back(wBkg4); 
+//  evtWeights.push_back(wBkg2);
   std::vector<PdfBase*> components;
   components.push_back(overallSignal); 
-  components.push_back(bkg2Pdf); 
-  components.push_back(bkg3Pdf); 
-  components.push_back(bkg4Pdf); 
-  EventWeightedAddPdf* overallPdf = new EventWeightedAddPdf("total", evtWeights, components);
+  components.push_back(bkgPdf); 
+  overallPdf = new EventWeightedAddPdf("total", evtWeights, components);
+  }
+  else overallPdf = overallSignal;
   //overallPdf->setDebugMask(1); 
   std::cout << "Copying data to GPU\n"; 
   overallPdf->setData(data);  
   FitManager datapdf(overallPdf); 
   datapdf.setMaxCalls(64000); 
-
-  if (paramUp != "") {
-    Variable* target = overallPdf->getParameterByName(paramUp);
-    assert(target); 
-    target->value += target->error;
-  }
-  if (paramDn != "") {
-    Variable* target = overallPdf->getParameterByName(paramDn);
-    assert(target); 
-    target->value -= target->error;
-  }
+  
+/*  overallSignal->setData(data); 
+  FitManager datapdf(overallSignal); 
+  datapdf.setMaxCalls(64000); */
 
   std::cout << "Starting fit\n"; 
-  //bkg4Pdf->setDebugMask(1); 
   gettimeofday(&startTime, NULL);
   startCPU = times(&startProc);
   //ROOT::Minuit2::FunctionMinimum* min = datapdf.fit();
-  //overallSignal->setDebugMask(1); 
   datapdf.fit(); 
   stopCPU = times(&stopProc);
   gettimeofday(&stopTime, NULL);
@@ -3595,7 +4476,7 @@ void runCanonicalFit (char* fname, bool noPlots = true) {
 
   datapdf.getMinuitValues();
   printf("Fit results:\ntau    : (%.3f $\\pm$ %.3f) fs\nxmixing: (%.3f $\\pm$ %.3f)%\nymixing: (%.3f $\\pm$ %.3f)%\n",
-	 1000*ptr_to_dtau->value, 1000*ptr_to_dtau->error,
+          1000*ptr_to_dtau->value, 1000*ptr_to_dtau->error,
 	 100*ptr_to_xmix->value, 100*ptr_to_xmix->error,
 	 100*ptr_to_ymix->value, 100*ptr_to_ymix->error);
 
@@ -3623,8 +4504,182 @@ void runCanonicalFit (char* fname, bool noPlots = true) {
   xscan.Draw();
   foo->SaveAs("xscan.png"); 
   */ 
+/*  if (noPlots) return; 
+  makeDalitzPlots(overallPdf);   */
+//  makeToyDalitzPlots(overallPdf);   
+}
+
+void runCanonicalFit (char* fname, bool noPlots = true) {
+  makeFullFitVariables(); 
+  if (mdslices > 1) massd0 = new Variable("massd0", 1.8654 + 0.0075*md0_lower_window + md0offset, 1.8654 + 0.0075*md0_upper_window + md0offset);
+  std::cout << "Loading events from " << fname << std::endl;
+  loadDataFile(fname);   
+
+  std::cout << "Creating overall signal PDF\n"; 
+  GooPdf* overallSignal = makeOverallSignal(); 
+
+  TRandom donram(blindSeed); // The rain and the sun! 
+  if (0 != blindSeed) {
+    ptr_to_xmix->blind = donram.Gaus(0, 0.005);
+    ptr_to_ymix->blind = donram.Gaus(0, 0.005);
+  }
+  //overallSignal->setDebugMask(1); 
+
+
+  int oldBins1 = m12->numbins;
+  int oldBins2 = m13->numbins;
+  int oldDTimeBins = dtime->numbins;
+  int oldSigmaBins = sigma->numbins;
+  // Too fine a binning here leads to bad results due to fluctuations. 
+  m12->numbins = bkgHistBins;
+  m13->numbins = bkgHistBins;
+  dtime->numbins = 50;
+  sigma->numbins = 50;
+  std::cout << "Creating background PDFs\n"; 
+  GooPdf* bkg2Pdf = makeBkg2DalitzPdf(true, true); 
+  GooPdf* bkg3Pdf = makeBkg3DalitzPdf(true, true); 
+  GooPdf* bkg4Pdf = makeBkg4DalitzPdf(true, true); 
+  m12->numbins = oldBins1;
+  m13->numbins = oldBins2; 
+  dtime->numbins = oldDTimeBins;
+  sigma->numbins = oldSigmaBins; 
+
+  getBackgroundFile(2);
+  std::cout << "Reading bkg2 parameters from " << strbuffer << std::endl;
+  readFromFile(bkg2Pdf, strbuffer);
+  // NB, background 3 and 4 params do not actually work. Only hists.
+  getBackgroundFile(3);
+  std::cout << "Reading bkg3 parameters from " << strbuffer << std::endl;
+  readFromFile(bkg3Pdf, strbuffer);
+  getBackgroundFile(4);
+  std::cout << "Reading bkg4 parameters from " << strbuffer << std::endl;
+  readFromFile(bkg4Pdf, strbuffer);
+
+  bkg2Pdf->setParameterConstantness(true);
+  bkg3Pdf->setParameterConstantness(true);
+  bkg4Pdf->setParameterConstantness(true);
+
+  //bkg3Pdf->setDebugMask(1); 
+
+  int eventSize = massd0 ? 11 : 10; 
+  eventSize -= 1;
+  std::cout << "Setting data size " << eventSize << std::endl; 
+  signalDalitz->setDataSize(data->getNumEvents(), eventSize); // Must take into account event weights! 
+  //bkg2Pdf->setDebugMask(1); 
+  if (incsum1) incsum1->setDataSize(data->getNumEvents(), eventSize); 
+  if (incsum2) incsum2->setDataSize(data->getNumEvents(), eventSize); 
+  //bkg3Pdf->setDebugMask(1); 
+  if (incsum3) incsum3->setDataSize(data->getNumEvents(), eventSize); 
+  if (incsum4) incsum4->setDataSize(data->getNumEvents(), eventSize); 
+  if (incsum5) incsum5->setDataSize(data->getNumEvents(), eventSize); 
+  if (incsum6) incsum6->setDataSize(data->getNumEvents(), eventSize); 
+  
+  std::cout << "Creating overall PDF\n"; 
+  std::vector<Variable*> evtWeights;
+  evtWeights.push_back(wSig0);
+  evtWeights.push_back(wBkg2); 
+  evtWeights.push_back(wBkg3); 
+//  evtWeights.push_back(wBkg4); 
+  std::vector<PdfBase*> components;
+  components.push_back(overallSignal); 
+  components.push_back(bkg2Pdf); 
+  components.push_back(bkg3Pdf); 
+  components.push_back(bkg4Pdf); 
+  EventWeightedAddPdf* overallPdf = new EventWeightedAddPdf("total", evtWeights, components);
+  //overallPdf->setDebugMask(1); 
+  std::cout << "Copying data to GPU\n"; 
+  overallPdf->setData(data);  
+  FitManager datapdf(overallPdf); 
+  datapdf.setMaxCalls(64000); 
+
+  if (paramUp != "") {
+    Variable* target = overallPdf->getParameterByName(paramUp);
+    assert(target); 
+    target->value += target->error;
+  }
+  if (paramDn != "") {
+    Variable* target = overallPdf->getParameterByName(paramDn);
+    assert(target); 
+    target->value -= target->error;
+  }
+
+  vector<double> fracList;
+//  signalDalitz->getFractions(fracList);
+  std::cout << "Starting fit\n"; 
+  //bkg4Pdf->setDebugMask(1); 
+  gettimeofday(&startTime, NULL);
+  startCPU = times(&startProc);
+  //ROOT::Minuit2::FunctionMinimum* min = datapdf.fit();
+  //overallSignal->setDebugMask(1); 
+  datapdf.fit(); 
+  stopCPU = times(&stopProc);
+  gettimeofday(&stopTime, NULL);
+  //overallSignal->setDebugMask(0); 
+
+#ifdef PROFILING
+  overallPdf->printProfileInfo(); 
+#endif 
+
+  datapdf.getMinuitValues();
+/*  const int nSamples = 1000;
+  datapdf.setRandMinuitValues (1000);
+  signalDalitz->getFractions(fracList);
+  printf("Fit results:\ntau    : (%.3f $\\pm$ %.3f) fs\nxmixing: (%.3f $\\pm$ %.3f)%\nymixing: (%.3f $\\pm$ %.3f)%\n",
+          1000*ptr_to_dtau->value, 1000*ptr_to_dtau->error,
+	 100*ptr_to_xmix->value, 100*ptr_to_xmix->error,
+	 100*ptr_to_ymix->value, 100*ptr_to_ymix->error);
+  const int nRes = fracList.size();
+  vector <float> fractions[nRes];
+  float mean[nRes];
+  float rms[nRes];
+  for (int ii=0;ii<nRes;ii++) mean[ii] = rms[ii] = 0;
+  for (int ii=0;ii<nSamples;ii++){
+      datapdf.loadSample(ii);
+      signalDalitz->getFractions(fracList);
+      for (int jj=0;jj<nRes; jj++) {
+          fractions[jj].push_back(fracList[jj]);
+          mean[jj] += fracList[jj];
+          rms[jj] += fracList[jj]*fracList[jj];
+      }
+  }
+  TH1F* hFracs[nRes];
+  TFile * froot = new TFile("fractionHists.root", "recreate");
+  for (int ii=0;ii<nRes;ii++) {
+      mean[ii] /= nSamples;
+      rms[ii] = sqrt(rms[ii]/nSamples-mean[ii]*mean[ii]); 
+      sprintf(strbuffer, "hfrac_res%d", ii);
+      hFracs[ii] = new TH1F(strbuffer, "", 100, mean[ii]-4*rms[ii], mean[ii]+4*rms[ii]);
+      for (int jj=0;jj<nSamples;jj++)
+          hFracs[ii]->Fill(fractions[ii][jj]);
+      hFracs[ii]->Write();
+  } 
+  froot->Close();*/
+  /*
+  std::cout << "Fit results: \n" 
+	    << "tau    : (" << 1000*ptr_to_dtau->value << " $\\pm$ " << 1000*ptr_to_dtau->error << ") fs\n"
+	    << "xmixing: (" << 100*ptr_to_xmix->value << " $\\pm$ " << 100*ptr_to_xmix->error << ")%\n"
+	    << "ymixing: (" << 100*ptr_to_ymix->value << " $\\pm$ " << 100*ptr_to_ymix->error << ")%\n";
+  */
+
+  /*
+  double fitx = ptr_to_xmix->value;
+  TH1F xscan("xscan", "", 200, fitx - 0.0001 - 0.0000005, fitx + 0.0001 - 0.0000005); 
+  xscan.SetStats(false); 
+  //double fity = ptr_to_ymix->value;
+  for (int i = 0; i < 200; ++i) {
+    ptr_to_xmix->value = fitx - 0.0001 + 0.000001*i;
+    overallPdf->copyParams(); 
+    double nll = overallPdf->calculateNLL(); 
+    printf("%i: %.10f\n", i, nll); 
+    xscan.SetBinContent(i+1, nll - floor(nll)); 
+  }
+
+  foo->cd();
+  xscan.Draw();
+  foo->SaveAs("xscan.png"); 
+  */ 
   if (noPlots) return; 
-  makeDalitzPlots(overallSignal);   
+//  makeToyDalitzPlots(overallPdf);   
 }
 
 void runSigmaFit (char* fname) {
@@ -4000,8 +5055,9 @@ GooPdf* runBackgroundDalitzFit (int bkgType, bool plots) {
 
   fitter.getMinuitValues();
   if (plots) {
-    //sprintf(strbuffer, "./plots_from_mixfit/bkgdalitz_%i/", bkgType);
-    //makeDalitzPlots(bkgPdf, strbuffer);
+    sprintf(strbuffer, "./plots_from_mixfit/bkgdalitz_%i/", bkgType);
+    //makeDalitzPlots(bkgPdf, strbuffer, true);
+    //getBackgroundFile(bkgType, true); 
     getBackgroundFile(bkgType); 
     writeToFile(bkgPdf, strbuffer); 
   }
@@ -4009,12 +5065,16 @@ GooPdf* runBackgroundDalitzFit (int bkgType, bool plots) {
   return bkgPdf; 
 }
 
-void getBackgroundFile (int bkgType) {
+void getBackgroundFile (int bkgType, bool usedtimebin) {
   if (mikhailSetup) sprintf(strbuffer, "./bkg_%i_mikhail.txt", bkgType); 
   else {
     if (2 == bkgType) {
-      if (Sideband == bkg2Model) sprintf(strbuffer, "./bkg_2_pdf_sideband_%islices.txt", m23Slices);
-      else sprintf(strbuffer, "./bkg_2_pdf_%islices.txt", m23Slices);
+      char morestr[100]= "slices";
+      int bkg2slices = m23Slices;
+      bkg2slices = 6;
+      if (usedtimebin) strcpy(morestr, "timeslices"); 
+      if (Sideband == bkg2Model) sprintf(strbuffer, "./bkg_2_pdf_sideband_%i%s.txt", bkg2slices, morestr);
+      else sprintf(strbuffer, "./bkg_2_pdf_%i%s.txt", bkg2slices, morestr);
     }
     else {
       string pdftype;
@@ -4033,29 +5093,25 @@ void makeTimePlots (char* fname) {
   std::cout << "Loading MC data from " << fname << std::endl;
   loadDataFile(fname);   
 
-  TH1F timeMean("timeMean", "", 6, massd0->lowerlimit, massd0->upperlimit);
-  timeMean.SetStats(false);
-  timeMean.SetLineWidth(3);
-  timeMean.SetXTitle("#pi#pi#pi^{0} mass [GeV]");
-  timeMean.SetYTitle("Mean of decay time [ps]");
   TH2F timeVsMass("timeVsMass", "", massd0->numbins, massd0->lowerlimit, massd0->upperlimit, dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
   timeVsMass.SetStats(false); 
-  timeVsMass.GetXaxis()->SetTitle("#pi#pi#pi^{0} mass [GeV]"); 
+  timeVsMass.GetXaxis()->SetTitle("#pi#pi#pi mass [GeV]"); 
   timeVsMass.GetYaxis()->SetTitle("Decay time [ps]"); 
 
-  int colors[6] = {kViolet + 1, kBlue, kCyan, kGreen, kYellow, kRed}; 
+  int colors[6] = {kViolet + 1, kBlue, kCyan, kGreen, kYellow, kRed};
+
   TH1F* timePlots[6]; 
   TH1F* massPlots[5]; 
   for (int i = 0; i < 6; ++i) {
     sprintf(strbuffer, "timePlot_%i.png", i); 
     timePlots[i] = new TH1F(strbuffer, "", dtime->numbins, dtime->lowerlimit, dtime->upperlimit);
     timePlots[i]->SetStats(false); 
-    timePlots[i]->SetXTitle("Decay time [ps]"); 
-    timePlots[i]->SetYTitle("Ratio"); 
     timePlots[i]->SetLineWidth(3); 
     timePlots[i]->SetLineColor(colors[i]); 
-    if (i == 5) continue;
+    timePlots[i]->GetYaxis()->SetTitle("Decay time [ps]"); 
+  }
 
+  for (int i = 0; i < 5; ++i) {
     sprintf(strbuffer, "massPlot_%i.png", i); 
     massPlots[i] = new TH1F(strbuffer, "", massd0->numbins, massd0->lowerlimit, massd0->upperlimit);
     massPlots[i]->SetStats(false); 
@@ -4079,17 +5135,12 @@ void makeTimePlots (char* fname) {
 
   foo->cd(); 
   normalise(timePlots[3]);
-  timePlots[3]->SetMinimum(0); 
-  timePlots[3]->Draw("hist"); 
+  timePlots[3]->Draw(""); 
   for (int i = 0; i < 6; ++i) {
     normalise(timePlots[i]); 
-    timePlots[i]->Draw("histsame"); 
-    timeMean.SetBinContent(i+1, timePlots[i]->GetMean());
-    timeMean.SetBinError(i+1, timePlots[i]->GetMeanError());
+    timePlots[i]->Draw("same"); 
   }
   foo->SaveAs("timePlots.png"); 
-  timeMean.Draw("e");
-  foo->SaveAs("timeMeanPlot.png"); 
 
   //normalise(massPlots[2]);
   massPlots[2]->GetYaxis()->SetRangeUser(0, massPlots[2]->GetMaximum()*1.1); 
@@ -4108,14 +5159,14 @@ void makeTimePlots (char* fname) {
     currLine->SetLineColor(colors[i]); 
     currLine->Draw(); 
 
-    if (5 == i) continue; 
+/*    if (3 == i) continue; 
     currLine = new TLine(massd0->lowerlimit + 0.00025, 
 			 dtime->lowerlimit + (i+0)*(dtime->upperlimit - dtime->lowerlimit)/5, 
 			 massd0->lowerlimit + 0.00025, 
 			 dtime->lowerlimit + (i+1)*(dtime->upperlimit - dtime->lowerlimit)/5);
     currLine->SetLineWidth(12); 
     currLine->SetLineColor(colors[i]); 
-//    currLine->Draw(); 
+    currLine->Draw(); */
   }
   foo->SaveAs("timeVsMass.png"); 
 }
@@ -4194,8 +5245,8 @@ bool parseArg (string arg) {
   else if (variable == "blindSeed") blindSeed = (int) floor(number + 0.5); 
   else if (variable == "mdslices") mdslices = (int) floor(number + 0.5); 
   else if (variable == "offset") md0offset = number*0.001; // Command line takes arg in MeV, stored in GeV. 
-  else if (variable == "upper_window") md0_upper_window = (int) floor(number + 0.5); 
-  else if (variable == "lower_window") md0_lower_window = (int) floor(number + 0.5); 
+  else if (variable == "upper_window") md0_upper_window = number;//(int) floor(number + 0.5); 
+  else if (variable == "lower_window") md0_lower_window = number;//(int) floor(number + 0.5); 
   else if (variable == "upper_delta_window") deltam_upper_window = number;
   else if (variable == "lower_delta_window") deltam_lower_window = number; 
   else if (variable == "upperTime") upperTime = number;
@@ -4272,6 +5323,7 @@ int main (int argc, char** argv) {
   case 1: runTruthMCFit(argv[2], false); break; 
   case 2: 
     m23Slices = atoi(argv[3]); 
+    doSigSigmaFit = true;
     runSigmaFit(argv[2]); 
     break; 
   case 3: runEfficiencyFit(atoi(argv[2])); break; 
@@ -4291,6 +5343,7 @@ int main (int argc, char** argv) {
     runGeneratedMCFit(argv[2], genResolutions, dplotres); 
     break; 
   case 9: makeTimePlots(argv[2]); break; 
+  case 10: runCocktailFit(argv[2]); break; 
   default: break; 
     
   }
