@@ -682,7 +682,8 @@ __host__ fptype TddpPdf::normalise () const {
     }
     
     // Possibly this can be done more efficiently by exploiting symmetry? 
-    for (int j = 0; j < decayInfo->resonances.size(); ++j) {
+    //for (int j = 0; j < decayInfo->resonances.size(); ++j) {
+    for (int j = i; j < decayInfo->resonances.size(); ++j) {
       if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
       ThreeComplex dummy(0, 0, 0, 0, 0, 0);
       SpecialComplexSum complexSum; 
@@ -690,16 +691,24 @@ __host__ fptype TddpPdf::normalise () const {
 						      thrust::make_zip_iterator(thrust::make_tuple(binIndex + totalBins, arrayAddress)),
 						      *(integrators[i][j]), 
 						      dummy, 
-						      complexSum); 
-      /*
-      std::cout << "With resonance " << j << ": " 
+						      complexSum);
+      if (i!=j) (*(integrals[j][i])) = ThreeComplex(
+              thrust::get<0>(*(integrals[i][j])),
+              -thrust::get<1>(*(integrals[i][j])),
+              thrust::get<2>(*(integrals[i][j])),
+              -thrust::get<3>(*(integrals[i][j])),
+              thrust::get<4>(*(integrals[i][j])),
+              -thrust::get<5>(*(integrals[i][j]))
+              );
+      
+/*      std::cout << "With resonance " << i<<", "<<j << ": " 
 		<< thrust::get<0>(*(integrals[i][j])) << " " 
 		<< thrust::get<1>(*(integrals[i][j])) << " " 
 		<< thrust::get<2>(*(integrals[i][j])) << " " 
 		<< thrust::get<3>(*(integrals[i][j])) << " " 
 		<< thrust::get<4>(*(integrals[i][j])) << " " 
-		<< thrust::get<5>(*(integrals[i][j])) << std::endl; 
-      */
+		<< thrust::get<5>(*(integrals[i][j])) << std::endl; */
+      
     }
   }      
 
