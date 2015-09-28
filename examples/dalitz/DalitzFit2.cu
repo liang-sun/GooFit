@@ -2,6 +2,7 @@
 #include "TRandom.hh"
 #include "TCanvas.h" 
 #include "TFile.h" 
+#include "TTree.h" 
 #include "TH1F.h" 
 #include "TH2F.h" 
 #include "TStyle.h" 
@@ -56,11 +57,33 @@ Variable* neutrlM = new Variable("neutrlM", piZeroMass);
 Variable* massSum = new Variable("massSum", _mD0*_mD0 + 2*piPlusMass*piPlusMass + piZeroMass*piZeroMass); // = 3.53481 
 Variable* constantOne = new Variable("constantOne", 1); 
 Variable* constantZero = new Variable("constantZero", 0); 
+  
+std::vector<PdfBase*> comps;
 
 GooPdf* kzero_veto = 0; 
+char strbuffer[1000]; 
+double mesonRad  = 1.5;
+DalitzPlotPdf* signalDalitz; 
 
 fptype cpuGetM23 (fptype massPZ, fptype massPM) {
   return (_mD02 + piZeroMass*piZeroMass + piPlusMass*piPlusMass + piPlusMass*piPlusMass - massPZ - massPM); 
+}
+
+bool cpuDalitz (fptype m12, fptype m13, fptype bigM, fptype dm1, fptype dm2, fptype dm3) {
+  if (m12 < POW(dm1 + dm2, 2)) return false; // This m12 cannot exist, it's less than the square of the (1,2) particle mass.
+  if (m12 > POW(bigM - dm3, 2)) return false;   // This doesn't work either, there's no room for an at-rest 3 daughter. 
+  
+  // Calculate energies of 1 and 3 particles in m12 rest frame. 
+  fptype e1star = 0.5 * (m12 - dm2*dm2 + dm1*dm1) / SQRT(m12); 
+  fptype e3star = 0.5 * (bigM*bigM - m12 - dm3*dm3) / SQRT(m12); 
+
+  // Bounds for m13 at this value of m12.
+  fptype minimum = POW(e1star + e3star, 2) - POW(SQRT(e1star*e1star - dm1*dm1) + SQRT(e3star*e3star - dm3*dm3), 2);
+  if (m13 < minimum) return false;
+  fptype maximum = POW(e1star + e3star, 2) - POW(SQRT(e1star*e1star - dm1*dm1) - SQRT(e3star*e3star - dm3*dm3), 2);
+  if (m13 > maximum) return false;
+
+  return true; 
 }
 
 void getToyData (std::string toyFileName) {
@@ -71,6 +94,25 @@ void getToyData (std::string toyFileName) {
   vars.push_back(eventNumber); 
   data = new UnbinnedDataSet(vars); 
 
+  const string suffix = ".root";
+  if (toyFileName.rfind(suffix)+suffix.length() == toyFileName.length()){
+      TFile*f = TFile::Open(toyFileName.c_str());
+      TTree*t = (TTree*)f->Get("ntp");
+      assert(t);
+      float m2_12, m2_13;
+      t->SetBranchAddress("m12", &m2_12);
+      t->SetBranchAddress("m13", &m2_13);
+      for (int i=0;i<t->GetEntries();i++){
+          t->GetEntry(i);
+          m12->value = m2_12;
+          m13->value = m2_13;
+          eventNumber->value = data->getNumEvents(); 
+          data->addEvent(); 
+          dalitzplot.Fill(m12->value, m13->value); 
+      }
+      f->Close();
+  }
+  else{
   std::ifstream reader;
   reader.open(toyFileName.c_str()); 
   std::string buffer;
@@ -107,20 +149,11 @@ void getToyData (std::string toyFileName) {
     reader >> dummy; 
     reader >> dummy; 
 
-    // EXERCISE 1 (preliminary): Impose an artificial reconstruction efficiency
-    // by throwing out events with a probability linear in m12. 
-    // NB! This exercise continues below. 
-
-    // EXERCISE 2: Instead of the above efficiency, impose a 
-    // K0 veto, by throwing out events with 0.475 < m23 < 0.505. 
-
-    // EXERCISE 3: Use both the above. 
-
     eventNumber->value = data->getNumEvents(); 
     data->addEvent(); 
 
     dalitzplot.Fill(m12->value, m13->value); 
-  }
+  }}
 
   dalitzplot.SetStats(false); 
   dalitzplot.Draw("colz");
@@ -311,7 +344,7 @@ DalitzPlotPdf* makeSignalPdf (GooPdf* eff = 0) {
 							     fixAmps ? new Variable("nonr_amp_imag", -0.108761 * (-1)) : 
 							     new Variable("nonr_amp_imag", -0.108761* (-1), 0.1, 0, 0)); 
 
-  dtop0pp->resonances.push_back(nonr); 
+ /* dtop0pp->resonances.push_back(nonr); 
   dtop0pp->resonances.push_back(rhop);
   dtop0pp->resonances.push_back(rho0); 
   dtop0pp->resonances.push_back(rhom); 
@@ -319,14 +352,14 @@ DalitzPlotPdf* makeSignalPdf (GooPdf* eff = 0) {
   dtop0pp->resonances.push_back(rho0_1450); 
   dtop0pp->resonances.push_back(rhom_1450); 
   dtop0pp->resonances.push_back(rhop_1700); 
-  dtop0pp->resonances.push_back(rho0_1700); 
+  dtop0pp->resonances.push_back(rho0_1700); */
   dtop0pp->resonances.push_back(rhom_1700); 
-  dtop0pp->resonances.push_back(f0_980); 
+/*  dtop0pp->resonances.push_back(f0_980); 
   dtop0pp->resonances.push_back(f0_1370); 
   dtop0pp->resonances.push_back(f0_1500); 
   dtop0pp->resonances.push_back(f0_1710); 
   dtop0pp->resonances.push_back(f2_1270); 
-  dtop0pp->resonances.push_back(f0_600); 
+  dtop0pp->resonances.push_back(f0_600); */
 
   if (!fitMasses) {
     for (vector<ResonancePdf*>::iterator res = dtop0pp->resonances.begin(); res != dtop0pp->resonances.end(); ++res) {
@@ -347,15 +380,144 @@ DalitzPlotPdf* makeSignalPdf (GooPdf* eff = 0) {
     coefficients.push_back(constantOne); 
     eff = new PolynomialPdf("constantEff", observables, coefficients, offsets, 0);
   }
+  comps.clear();
+  comps.push_back(eff);
+  if (!kzero_veto) makeKzeroVeto();
+  comps.push_back(kzero_veto);
+  ProdPdf* effWithVeto = new ProdPdf("effWithVeto", comps);
 
-  return new DalitzPlotPdf("signalPDF", m12, m13, eventNumber, dtop0pp, eff);
+  return new DalitzPlotPdf("signalPDF", m12, m13, eventNumber, dtop0pp, effWithVeto);
+}
+
+void drawFitPlotsWithPulls(TH1* hd, TH1* ht, string plotdir){
+    const char* hname = hd->GetName();
+    char obsname[10];
+    for (int i=0;;i++) {
+        if (hname[i]=='_') obsname[i] = '\0';
+        else obsname[i] = hname[i];
+        if (obsname[i] == '\0') break;
+    }
+    ht->Scale(hd->Integral()/ht->Integral());
+    foo->cd(); 
+    foo->Clear();
+    hd->Draw("ep");
+    ht->Draw("csame");
+    sprintf(strbuffer, "%s/%s_fit.C", plotdir.c_str(), obsname);
+    foo->SaveAs(strbuffer);
+    sprintf(strbuffer, "%s/%s_fit.pdf", plotdir.c_str(), obsname);
+    foo->SaveAs(strbuffer);
+/*    sprintf(strbuffer, "%s/%s_fit_log.pdf", plotdir.c_str(), obsname);
+    foo->SaveAs(strbuffer);*/
+}
+
+void makeToyDalitzPdfPlots (GooPdf* overallSignal, string plotdir = "plots") {
+  TH1F m12_dat_hist("m12_dat_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_dat_hist.SetStats(false); 
+  m12_dat_hist.SetMarkerStyle(8); 
+  m12_dat_hist.SetMarkerSize(1.2);
+  m12_dat_hist.GetXaxis()->SetTitle("m^{2}(#pi^{+} #pi^{0}) [GeV]");
+  sprintf(strbuffer, "Events / %.1f MeV", 1e3*m12_dat_hist.GetBinWidth(1));
+  m12_dat_hist.GetYaxis()->SetTitle(strbuffer); 
+  TH1F m12_pdf_hist("m12_pdf_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit);
+  m12_pdf_hist.SetStats(false); 
+  m12_pdf_hist.SetLineColor(kBlue); 
+  m12_pdf_hist.SetLineWidth(3); 
+  TH1F m13_dat_hist("m13_dat_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_dat_hist.SetStats(false); 
+  m13_dat_hist.SetMarkerStyle(8); 
+  m13_dat_hist.SetMarkerSize(1.2);
+  m13_dat_hist.GetXaxis()->SetTitle("m^{2}(#pi^{-} #pi^{0}) [GeV]");
+  sprintf(strbuffer, "Events / %.1f MeV", 1e3*m13_dat_hist.GetBinWidth(1));
+  m13_dat_hist.GetYaxis()->SetTitle(strbuffer); 
+  TH1F m13_pdf_hist("m13_pdf_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m13_pdf_hist.SetStats(false); 
+  m13_pdf_hist.SetLineColor(kBlue); 
+  m13_pdf_hist.SetLineWidth(3); 
+  TH1F m23_dat_hist("m23_dat_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m23_dat_hist.SetStats(false); 
+  m23_dat_hist.SetMarkerStyle(8); 
+  m23_dat_hist.SetMarkerSize(1.2);
+  m23_dat_hist.GetXaxis()->SetTitle("m^{2}(#pi^{+} #pi^{-}) [GeV]");
+  sprintf(strbuffer, "Events / %.1f MeV", 1e3*m13_dat_hist.GetBinWidth(1));
+  m23_dat_hist.GetYaxis()->SetTitle(strbuffer); 
+  TH1F m23_pdf_hist("m23_pdf_hist", "", m13->numbins, m13->lowerlimit, m13->upperlimit);
+  m23_pdf_hist.SetStats(false); 
+  m23_pdf_hist.SetLineColor(kBlue); 
+  m23_pdf_hist.SetLineWidth(3); 
+  double totalPdf = 0; 
+  double totalDat = 0; 
+  TH2F dalitzpp0_dat_hist("dalitzpp0_dat_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit, m13->numbins, m13->lowerlimit, m13->upperlimit);
+  dalitzpp0_dat_hist.SetStats(false); 
+  dalitzpp0_dat_hist.GetXaxis()->SetTitle("m^{2}(#pi^{+} #pi^{0}) [GeV]");
+  dalitzpp0_dat_hist.GetYaxis()->SetTitle("m^{2}(#pi^{-} #pi^{0}) [GeV]");
+  TH2F dalitzpp0_pdf_hist("dalitzpp0_pdf_hist", "", m12->numbins, m12->lowerlimit, m12->upperlimit, m13->numbins, m13->lowerlimit, m13->upperlimit);
+/*  dalitzpp0_pdf_hist.GetXaxis()->SetTitle("m^{2}(K^{-} #pi^{0}) [GeV^{2}]");
+  dalitzpp0_pdf_hist.GetYaxis()->SetTitle("m^{2}(K^{-} #pi^{+}) [GeV^{2}]");*/
+  dalitzpp0_pdf_hist.GetXaxis()->SetTitle("m^{2}(#pi^{+} #pi^{0}) [GeV^{2}]");
+  dalitzpp0_pdf_hist.GetYaxis()->SetTitle("m^{2}(#pi^{-} #pi^{0}) [GeV^{2}]");
+  dalitzpp0_pdf_hist.SetStats(false); 
+    std::vector<Variable*> vars;
+    vars.push_back(m12);
+    vars.push_back(m13);
+    vars.push_back(eventNumber); 
+    UnbinnedDataSet currData(vars); 
+  int evtCounter = 0; 
+
+  for (int i = 0; i < m12->numbins; ++i) {
+      m12->value = m12->lowerlimit + (m12->upperlimit - m12->lowerlimit)*(i + 0.5) / m12->numbins; 
+      for (int j = 0; j < m13->numbins; ++j) {
+          m13->value = m13->lowerlimit + (m13->upperlimit - m13->lowerlimit)*(j + 0.5) / m13->numbins; 
+          if (!cpuDalitz(m12->value, m13->value, _mD0, piPlusMass, piPlusMass, piZeroMass)) continue;
+          eventNumber->value = evtCounter; 
+          evtCounter++;
+          currData.addEvent(); 
+      }
+  }
+  overallSignal->setData(&currData);
+  signalDalitz->setDataSize(currData.getNumEvents()); 
+  std::vector<std::vector<double> > pdfValues;
+  overallSignal->getCompProbsAtDataPoints(pdfValues);
+  for (unsigned int j = 0; j < pdfValues[0].size(); ++j) {
+	double currm12 = currData.getValue(m12, j);
+	double currm13 = currData.getValue(m13, j);
+
+      dalitzpp0_pdf_hist.Fill(currm12, currm13, pdfValues[0][j]);
+      m12_pdf_hist.Fill(currm12, pdfValues[0][j]);
+      m13_pdf_hist.Fill(currm13, pdfValues[0][j]);
+      m23_pdf_hist.Fill(cpuGetM23(currm12, currm13), pdfValues[0][j]); 
+      totalPdf     += pdfValues[0][j]; 
+  }
+  foodal->cd(); 
+  foodal->SetLogz(false);
+  dalitzpp0_pdf_hist.Draw("colz");
+  foodal->SaveAs((plotdir + "/dalitzpp0_pdf.png").c_str());
+/*  m12_pdf_hist.Draw("");
+  foodal->SaveAs((plotdir + "/m12_pdf_hist.png").c_str());
+  m13_pdf_hist.Draw("");
+  foodal->SaveAs((plotdir + "/m13_pdf_hist.png").c_str());
+  if (!data) return;*/
+  for (unsigned int evt = 0; evt < data->getNumEvents(); ++evt) {
+    double data_m12 = data->getValue(m12, evt);
+    m12_dat_hist.Fill(data_m12); 
+    double data_m13 = data->getValue(m13, evt);
+    m13_dat_hist.Fill(data_m13); 
+    dalitzpp0_dat_hist.Fill(data_m12, data_m13);
+    m23_dat_hist.Fill(cpuGetM23(data_m12, data_m13)); 
+    totalDat++; 
+  }
+  dalitzpp0_dat_hist.Draw("colz");
+  foodal->SaveAs((plotdir + "/dalitzpp0_dat.png").c_str());
+
+  drawFitPlotsWithPulls(&m12_dat_hist, &m12_pdf_hist, plotdir);
+  drawFitPlotsWithPulls(&m13_dat_hist, &m13_pdf_hist, plotdir);
+  drawFitPlotsWithPulls(&m23_dat_hist, &m23_pdf_hist, plotdir);
 }
 
 void runToyFit (std::string toyFileName) {
   m12 = new Variable("m12", 0, 3);
   m13 = new Variable("m13", 0, 3); 
-  m12->numbins = 240;
-  m13->numbins = 240;
+  m12->numbins = 1000;
+  m13->numbins = 1000;
   eventNumber = new Variable("eventNumber", 0, INT_MAX);
   getToyData(toyFileName);
 
@@ -368,16 +530,20 @@ void runToyFit (std::string toyFileName) {
   // EXERCISE 3: Make the efficiency a product of the two functions
   // from the previous exercises.
 
-  DalitzPlotPdf* signal = makeSignalPdf(); 
-  signal->setData(data); 
-  signal->setDataSize(data->getNumEvents()); 
-  FitManager datapdf(signal); 
+  signalDalitz = makeSignalPdf(); 
+  comps.clear();
+  comps.push_back(signalDalitz);
+  ProdPdf* overallSignal = new ProdPdf("overallSignal", comps);
+  overallSignal->setData(data); 
+  signalDalitz->setDataSize(data->getNumEvents()); 
+  FitManager datapdf(overallSignal); 
   
   gettimeofday(&startTime, NULL);
   startCPU = times(&startProc);
-  datapdf.fit(); 
+//  datapdf.fit(); 
   stopCPU = times(&stopProc);
   gettimeofday(&stopTime, NULL);
+  makeToyDalitzPdfPlots(overallSignal);   
 }
 
 int main (int argc, char** argv) {
