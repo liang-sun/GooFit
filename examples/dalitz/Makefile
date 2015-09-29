@@ -5,7 +5,7 @@ OutPutOpt = -o
 
 CXXFLAGS     = -w -O3 -arch=sm_20 
 ifeq ($(CUDALOCATION), )
-CUDALOCATION = /usr/local/cuda-7.5/
+CUDALOCATION = /usr/local/cuda/
 endif
 CUDAHEADERS = $(CUDALOCATION)/include/
 

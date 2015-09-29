@@ -334,25 +334,26 @@ __host__ fptype DalitzPlotPdf::normalise () const {
 						      *(integrators[i][j]), 
 						      dummy, 
 						      complexSum); 
-      if (i!=j) (*(integrals[j][i])) = conj(*(integrals[i][j]));
+//      if (i != j) *(integrals[j][i]) = conj(*(integrals[i][j]));
     }
   }      
 
   // End of time-consuming integrals. 
-  complex<fptype> sumIntegral(0, 0);
+  //complex<fptype> sumIntegral(0, 0);
+  fptype sumIntegral(0);
   for (unsigned int i = 0; i < decayInfo->resonances.size(); ++i) {
     int param_i = parameters + resonanceOffset_DP + resonanceSize*i; 
     complex<fptype> amplitude_i(host_params[host_indices[param_i]], host_params[host_indices[param_i + 1]]);
-    for (unsigned int j = 0; j < decayInfo->resonances.size(); ++j) {
+    for (unsigned int j = i; j < decayInfo->resonances.size(); ++j) {
       int param_j = parameters + resonanceOffset_DP + resonanceSize*j; 
       complex<fptype> amplitude_j(host_params[host_indices[param_j]], -host_params[host_indices[param_j + 1]]); 
       // Notice complex conjugation
-
-      sumIntegral += (amplitude_i * amplitude_j * complex<fptype>((*(integrals[i][j])).real, (*(integrals[i][j])).imag)); 
+      complex<fptype> cpmx = (amplitude_i * amplitude_j * complex<fptype>((*(integrals[i][j])).real, (*(integrals[i][j])).imag));
+      sumIntegral += (1+(i!=j))*real(cpmx);
     }
   }
 
-  fptype ret = real(sumIntegral); // That complex number is a square, so it's fully real
+  fptype ret = sumIntegral; //real(sumIntegral); // That complex number is a square, so it's fully real
   double binSizeFactor = 1;
   binSizeFactor *= ((_m12->upperlimit - _m12->lowerlimit) / _m12->numbins);
   binSizeFactor *= ((_m13->upperlimit - _m13->lowerlimit) / _m13->numbins);
