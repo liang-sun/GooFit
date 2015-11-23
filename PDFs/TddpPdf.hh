@@ -76,6 +76,7 @@ private:
 
 class SpecialDalitzIntegrator : public thrust::unary_function<thrust::tuple<int, fptype*>, ThreeComplex > {
 public:
+  bool useEff;
 
   SpecialDalitzIntegrator (int pIdx, unsigned int ri, unsigned int rj);
   EXEC_TARGET ThreeComplex operator () (thrust::tuple<int, fptype*> t) const;

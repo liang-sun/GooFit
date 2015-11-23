@@ -82,15 +82,15 @@ public:
               const bool symmDP = false );
   
   // Cubic spline method, a list of bin limits and a list of knobs
-  ResonancePdf::ResonancePdf (string name,
-                                                Variable* ar,
-                                                Variable* ai,
-                                                vector<fptype>& HH_bin_limits,
-                                                vector<Variable*>& pwa_coefs_reals,
-                                                vector<Variable*>& pwa_coefs_imags,
-                                                unsigned int cyc, 
-                                                ResPdfType rpt = RES_SPLINE,
-                                                const bool symmDP = false);
+  ResonancePdf (string name,
+          Variable* ar,
+          Variable* ai,
+          vector<fptype>& HH_bin_limits,
+          vector<Variable*>& pwa_coefs_reals,
+          vector<Variable*>& pwa_coefs_imags,
+          unsigned int cyc, 
+          ResPdfType rpt = RES_SPLINE,
+          const bool symmDP = false);
 
   __host__ void storeParameters () const;// Do something special for PWA
 

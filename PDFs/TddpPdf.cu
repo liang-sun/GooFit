@@ -583,15 +583,24 @@ __host__ fptype TddpPdf::getFractions(vector<fptype>&  fracLists) const {
     }
     
     // Possibly this can be done more efficiently by exploiting symmetry? 
-    for (int j = 0; j < decayInfo->resonances.size(); ++j) {
-      if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
+    for (int j = i; j < decayInfo->resonances.size(); ++j) {
+//      if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
       ThreeComplex dummy(0, 0, 0, 0, 0, 0);
       SpecialComplexSum complexSum; 
+      integrators[i][j]->useEff = false;
       (*(integrals[i][j])) = thrust::transform_reduce(thrust::make_zip_iterator(thrust::make_tuple(binIndex, arrayAddress)),
 						      thrust::make_zip_iterator(thrust::make_tuple(binIndex + totalBins, arrayAddress)),
 						      *(integrators[i][j]), 
 						      dummy, 
 						      complexSum); 
+      if (i!=j) (*(integrals[j][i])) = ThreeComplex(
+              thrust::get<0>(*(integrals[i][j])),
+              -thrust::get<1>(*(integrals[i][j])),
+              thrust::get<2>(*(integrals[i][j])),
+              -thrust::get<3>(*(integrals[i][j])),
+              thrust::get<4>(*(integrals[i][j])),
+              -thrust::get<5>(*(integrals[i][j]))
+              );
     }
   }      
 
@@ -600,16 +609,10 @@ __host__ fptype TddpPdf::getFractions(vector<fptype>&  fracLists) const {
   complex<fptype> integralA_2(0, 0);
   const unsigned int nres = decayInfo->resonances.size();
   fptype matdiag[nres]; 
-  complex<fptype> phi_rhoppim(0,0);
-  complex<fptype> phi_rhozpiz(0,0);
-  complex<fptype> phi_rhompip(0,0);
-  complex<fptype> phi_f0pi0(0,0);
-  complex<fptype> phi_nonres(0,0);
   for (unsigned int i = 0; i < nres; ++i) {
     int param_i = parameters + resonanceOffset + resonanceSize*i; 
     complex<fptype> amplitude_i(host_params[host_indices[param_i]], host_params[host_indices[param_i + 1]]);
     std::string resname = decayInfo->resonances[i]->getName();
-//    if (resname.find("nonr")==0) phi_nonres = amplitude_i*;
 
     for (unsigned int j = 0; j < nres; ++j) {
       int param_j = parameters + resonanceOffset + resonanceSize*j; 
@@ -801,6 +804,7 @@ SpecialDalitzIntegrator::SpecialDalitzIntegrator (int pIdx, unsigned int ri, uns
   : resonance_i(ri)
   , resonance_j(rj)
   , parameters(pIdx) 
+  , useEff(true)
 {}
 
 EXEC_TARGET ThreeComplex SpecialDalitzIntegrator::operator () (thrust::tuple<int, fptype*> t) const {
@@ -831,6 +835,7 @@ EXEC_TARGET ThreeComplex SpecialDalitzIntegrator::operator () (thrust::tuple<int
   unsigned int* indices = paramIndices + parameters;   
   ThreeComplex ret = device_Tddp_calcIntegrals(binCenterM12, binCenterM13, resonance_i, resonance_j, cudaArray, indices); 
 
+  if (!useEff) return ret;
   fptype fakeEvt[10]; // Need room for many observables in case m12 or m13 were assigned a high index in an event-weighted fit. 
   fakeEvt[indices[indices[0] + 2 + 2]] = binCenterM12;
   fakeEvt[indices[indices[0] + 2 + 3]] = binCenterM13;

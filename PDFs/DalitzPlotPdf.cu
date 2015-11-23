@@ -236,9 +236,10 @@ __host__ fptype DalitzPlotPdf::getFractions (vector<fptype>&  fracLists) const {
     // This can be done more efficiently by exploiting symmetry? 
     //for (int j = 0; j < decayInfo->resonances.size(); ++j) {
     for (int j = i; j < decayInfo->resonances.size(); ++j) {
-      if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
+//      if ((!redoIntegral[i]) && (!redoIntegral[j])) continue; 
       devcomplex<fptype> dummy(0, 0);
       thrust::plus<devcomplex<fptype> > complexSum; 
+      integrators[i][j]->useEff = false;
       (*(integrals[i][j])) = thrust::transform_reduce(thrust::make_zip_iterator(thrust::make_tuple(binIndex, arrayAddress)),
 						      thrust::make_zip_iterator(thrust::make_tuple(binIndex + totalBins, arrayAddress)),
 						      *(integrators[i][j]), 
@@ -367,6 +368,7 @@ SpecialResonanceIntegrator::SpecialResonanceIntegrator (int pIdx, unsigned int r
   : resonance_i(ri)
   , resonance_j(rj)
   , parameters(pIdx) 
+  , useEff(true)
 {}
 
 EXEC_TARGET devcomplex<fptype> SpecialResonanceIntegrator::operator () (thrust::tuple<int, fptype*> t) const {
@@ -395,6 +397,7 @@ EXEC_TARGET devcomplex<fptype> SpecialResonanceIntegrator::operator () (thrust::
 
   unsigned int* indices = paramIndices + parameters;   
   devcomplex<fptype> ret = device_DalitzPlot_calcIntegrals(binCenterM12, binCenterM13, resonance_i, resonance_j, cudaArray, indices); 
+  if (!useEff) return ret;
 
   fptype fakeEvt[10]; // Need room for many observables in case m12 or m13 were assigned a high index in an event-weighted fit. 
   fakeEvt[indices[indices[0] + 2 + 0]] = binCenterM12;

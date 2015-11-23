@@ -43,6 +43,7 @@ protected:
 
 class SpecialResonanceIntegrator : public thrust::unary_function<thrust::tuple<int, fptype*>, devcomplex<fptype> > {
 public:
+  bool useEff;
   // Class used to calculate integrals of terms BW_i * BW_j^*. 
   SpecialResonanceIntegrator (int pIdx, unsigned int ri, unsigned int rj);
   EXEC_TARGET devcomplex<fptype> operator () (thrust::tuple<int, fptype*> t) const;
