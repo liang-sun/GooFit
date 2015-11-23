@@ -1,7 +1,7 @@
 CXX=g++
 LD=g++
 
-CXXFLAGS     = -O2 -fPIC -pthread -g
+CXXFLAGS     = -O2 -fPIC -pthread
 
 UNAME=$(shell uname)
 ifeq ($(UNAME), Darwin)

@@ -1,6 +1,7 @@
 #!/bin/sh
 trapCmd=""
 cmd="g++"
+#cmd="nvcc -x c++ -ccbin /usr/bin/g++"
 
 pwd=$(/bin/pwd)
 verbose=""

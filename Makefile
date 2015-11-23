@@ -1,5 +1,5 @@
 #------------------------------------------------------------------------------
-CXX=nvcc
+CXX=$(CUDALOCATION)/nvcc
 LD=g++ 
 OutPutOpt = -o
 
@@ -15,6 +15,7 @@ CUDALIBDIR=lib
 CXXFLAGS+=-m64
 endif
 
+EIGENINCDIR=/usr/include/eigen3
 ifneq ($(CUDAPRINT),)
 DEFINEFLAGS += -DCUDAPRINT=yes
 endif 
@@ -27,10 +28,12 @@ ifneq ($(PROFILE),)
 DEFINEFLAGS += -DPROFILING=yes
 endif 
 
+#TARGET_OMP = 1
 ifeq ($(TARGET_OMP),)
 CXXFLAGS += -arch=sm_20
 else
-DEFINEFLAGS += -fno-inline -fopenmp -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_BACKEND_OMP
+DEFINEFLAGS += -fopenmp -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_BACKEND_OMP
+#DEFINEFLAGS += -Xcompiler -fopenmp -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_BACKEND_OMP
 LIBS += -lgomp
 endif 
 
@@ -43,6 +46,7 @@ PWD = $(shell /bin/pwd)
 SRCDIR = $(PWD)/PDFs
 
 INCLUDES += -I$(SRCDIR) -I$(PWD) -I$(CUDAHEADERS) -I$(PWD)/rootstuff 
+INCLUDES += -I$(EIGENINCDIR)
 LIBS += -L$(CUDALOCATION)/$(CUDALIBDIR) -lcudart -L$(PWD)/rootstuff -lRootUtils 
 
 # GooPdf must be first in CUDAglob, as it defines global variables.
