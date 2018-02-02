@@ -3,7 +3,7 @@
 MEM_DEVICE fptype cDeriatives[2*MAXNKNOBS];
 //MEM_DEVICE fptype sharedCache[1024*5*MAXNKNOBS];
 
-EXEC_TARGET fptype twoBodyCMmom (double rMassSq, fptype d1m, fptype d2m) {
+EXEC_TARGET fptype twoBodyCMmom (fptype rMassSq, fptype d1m, fptype d2m) {
   // For A -> B + C, calculate momentum of B and C in rest frame of A. 
   // PDG 38.16.
 
@@ -17,6 +17,28 @@ EXEC_TARGET fptype twoBodyCMmom (double rMassSq, fptype d1m, fptype d2m) {
   return 0.5*SQRT(rMassSq)*kin1*kin2; 
 }
 
+EXEC_TARGET fptype twoBodyCMmom (fptype rMassSq, fptype d1m, fptype d2m, fptype mR) {
+  // For A -> B + C, calculate momentum of B and C in rest frame of A. 
+  // PDG 38.16.
+
+/*  fptype kin1 = rMassSq - POW(d1m+d2m, 2) ;
+  if (kin1 >= 0) kin1 = SQRT(kin1);
+  else kin1 = 1;
+  fptype kin2 = rMassSq - POW(d1m-d2m, 2) ;
+  if (kin2 >= 0) kin2 = SQRT(kin2);
+  else kin2 = 1; 
+
+  return 0.5*mR*kin1*kin2/rMassSq; //Equiv. to the original form if mR*mR == rMassSq*/
+    fptype x = rMassSq;
+    fptype y = d1m*d1m;
+    fptype z = d2m*d2m;
+	double l = (x - y - z)*(x - y - z) - 4*y*z;
+/*	if (l<0){ 
+		cout << "lambda - Error - lambda < 0" <<" mr = "<<SQRT(x)<< endl;
+                exit(-1);      
+	}*/
+	return SQRT(l)/(2*mR);    
+}
 
 EXEC_TARGET fptype dampingFactorSquare (fptype cmmom, int spin, fptype mRadius) {
   fptype square = mRadius*mRadius*cmmom*cmmom;
@@ -61,14 +83,14 @@ EXEC_TARGET fptype spinFactor (unsigned int spin, fptype motherMass, fptype daug
 
   if (m02 <=0) m02 = _mAB;
   fptype massFactor = 1.0/m02;
-  fptype sFactor = -1; 
+  fptype sFactor = -2; 
   sFactor *= ((_mBC - _mAC) + (massFactor*(motherMass*motherMass - _mC*_mC)*(_mA*_mA-_mB*_mB)));
   if (2 == spin) {
     sFactor *= sFactor; 
     fptype extraterm = ((_mAB-(2*motherMass*motherMass)-(2*_mC*_mC))+massFactor*pow((motherMass*motherMass-_mC*_mC),2));
     extraterm *= ((_mAB-(2*_mA*_mA)-(2*_mB*_mB))+massFactor*pow((_mA*_mA-_mB*_mB),2));
     extraterm /= 3;
-    sFactor -= extraterm;
+    sFactor -= -4*extraterm;
   }
   return sFactor; 
 }
@@ -87,32 +109,51 @@ EXEC_TARGET devcomplex<fptype> plainBW (fptype m12, fptype m13, fptype m23, unsi
   unsigned int doSwap           = indices[6]; 
 
   devcomplex<fptype> ret(0., 0.);
-  resmass *= resmass; 
+  fptype resmassSq  = resmass*resmass;
   for (int i=0;i<1+doSwap;i++){
 
   fptype rMassSq = (PAIR_12 == cyclic_index ? m12 : (PAIR_13 == cyclic_index ? m13 : m23));
+  fptype rMass = SQRT(rMassSq);  
   fptype frFactor = 1;
+  fptype fdFactor = 1;
 
   // Calculate momentum of the two daughters in the resonance rest frame; note symmetry under interchange (dm1 <-> dm2). 
   fptype measureDaughterMoms = twoBodyCMmom(rMassSq, 
 					    (PAIR_23 == cyclic_index ? daug2Mass : daug1Mass), 
-					    (PAIR_12 == cyclic_index ? daug2Mass : daug3Mass));
-  fptype nominalDaughterMoms = twoBodyCMmom(resmass, 
+					    (PAIR_12 == cyclic_index ? daug2Mass : daug3Mass),
+                        rMass);
+  fptype nominalDaughterMoms = twoBodyCMmom(resmassSq, 
 					    (PAIR_23 == cyclic_index ? daug2Mass : daug1Mass), 
 					    (PAIR_12 == cyclic_index ? daug2Mass : daug3Mass));
 
   if (0 != spin) {
     frFactor =  dampingFactorSquare(nominalDaughterMoms, spin, meson_radius);
     frFactor /= dampingFactorSquare(measureDaughterMoms, spin, meson_radius); 
+    // Form_Factor_Mother_Decay
+    fptype measureDaughterMoms2 = twoBodyCMmom(motherMass*motherMass, 
+                        rMass, 
+//					    (PAIR_23 == cyclic_index ? daug2Mass : daug1Mass), 
+					    (PAIR_12 == cyclic_index ? daug3Mass : daug2Mass),
+                        rMass);
+//                        motherMass);
+    fptype nominalDaughterMoms2 = twoBodyCMmom(motherMass*motherMass, 
+                        resmass, 
+//					    (PAIR_23 == cyclic_index ? daug2Mass : daug1Mass), 
+					    (PAIR_12 == cyclic_index ? daug3Mass : daug2Mass),
+                        resmass);
+//                        motherMass);
+
+    fdFactor =  dampingFactorSquare(nominalDaughterMoms2, spin, 5.);
+    fdFactor /= dampingFactorSquare(measureDaughterMoms2, spin, 5.); 
   }  
  
   // RBW evaluation
-  fptype A = (resmass - rMassSq); 
-  fptype B = resmass*reswidth * POW(measureDaughterMoms / nominalDaughterMoms, 2.0*spin + 1) * frFactor / SQRT(rMassSq);
+  fptype A = (resmassSq - rMassSq); 
+  fptype B = resmassSq*reswidth * POW(measureDaughterMoms / nominalDaughterMoms, 2.0*spin + 1) * frFactor / SQRT(rMassSq);
   fptype C = 1.0 / (A*A + B*B); 
   devcomplex<fptype> retur(A*C, B*C); // Dropping F_D=1
 
-  retur *= SQRT(frFactor); 
+  retur *= SQRT(frFactor*fdFactor); 
   fptype spinF = spinFactor(spin, motherMass, daug1Mass, daug2Mass, daug3Mass, m12, m13, m23, cyclic_index); 
 //  fptype spinF = spinFactor(spin, motherMass, daug1Mass, daug2Mass, daug3Mass, m12, m13, m23, cyclic_index, resmass); 
   retur *= spinF; 
@@ -133,14 +174,14 @@ EXEC_TARGET devcomplex<fptype> gaussian (fptype m12, fptype m13, fptype m23, uns
   fptype ret(0.);
   for (int i=0;i<1+doSwap;i++){
 
-  // Notice sqrt - this function uses mass, not mass-squared like the other resonance types. 
+  // Notice SQRT - this function uses mass, not mass-squared like the other resonance types. 
   fptype massToUse = SQRT(PAIR_12 == cyclic_index ? m12 : (PAIR_13 == cyclic_index ? m13 : m23));
   massToUse -= resmass;
   massToUse /= reswidth;
   massToUse *= massToUse;
   fptype retur = EXP(-0.5*massToUse); 
 
-  // Ignore factor 1/sqrt(2pi). 
+  // Ignore factor 1/SQRT(2pi). 
   retur /= reswidth;
   ret += retur;
   if (doSwap) {fptype swpmass = m12; m12 = m13; m13 = swpmass;}
@@ -153,7 +194,7 @@ EXEC_TARGET fptype hFun (double s, double daug2Mass, double daug3Mass) {
   // Last helper function
   const fptype _pi = 3.14159265359;
   double sm   = daug2Mass + daug3Mass;
-  double SQRTs = sqrt(s);
+  double SQRTs = SQRT(s);
   double k_s = twoBodyCMmom(s, daug2Mass, daug3Mass);
 
   double val = ((2/_pi) * (k_s/SQRTs) * log( (SQRTs + 2*k_s)/(sm)));
@@ -176,7 +217,7 @@ EXEC_TARGET fptype dFun (double s, double daug2Mass, double daug3Mass) {
   const fptype _pi = 3.14159265359;
   double sm   = daug2Mass + daug3Mass;
   double sm24 = sm*sm/4.0;
-  double m    = sqrt(s);
+  double m    = SQRT(s);
   double k_m2 = twoBodyCMmom(s, daug2Mass, daug3Mass);
  
   double val = 3.0/_pi * sm24/pow(k_m2, 2) * log((m + 2*k_m2)/sm) + m/(2*_pi*k_m2) - sm24*m/(_pi * pow(k_m2, 3));
@@ -463,7 +504,7 @@ EXEC_TARGET devcomplex<fptype> cubicspline (fptype m12, fptype m13, fptype m23, 
       khiAC ++;
   }
 //  while (khiAC<nKnobs&&mAC>mKKlimits[++khiAC]);
-  if (khiAC <=0 || khiAC == nKnobs)  timestorun = 0; 
+  if ((khiAC <=0 || khiAC == nKnobs)&&timestorun)  timestorun = 1; //Only run once even if set to be symmetric
 
   for (i=0;i<timestorun;i++){
   unsigned int kloAB = khiAB -1;//, kloAC = khiAC -1;

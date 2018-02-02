@@ -19,7 +19,7 @@ __host__ void PdfBase::copyParams (const std::vector<double>& pars) const {
       std::cout << pars[i] << " ";
     }
     
-    if (isnan(host_params[i])) {
+    if (std::isnan(host_params[i])) {
       std::cout << " agh, NaN, die " << i << std::endl;
       abortWithCudaPrintFlush(__FILE__, __LINE__, "NaN in parameter"); 
     }
@@ -37,7 +37,7 @@ __host__ void PdfBase::copyParams (const std::vector<double>& pars) const {
   for (unsigned int i = 0; i < pars.size(); ++i) {
     host_params[i] = pars[i]; 
     
-    if (isnan(host_params[i])) {
+    if (std::isnan(host_params[i])) {
       std::cout << " agh, parameter is NaN, die " << i << std::endl;
       abortWithCudaPrintFlush(__FILE__, __LINE__, "NaN in parameter"); 
     }
@@ -126,7 +126,7 @@ __host__ void PdfBase::setData (std::vector<std::map<Variable*, fptype> >& data)
 
   gooMalloc((void**) &dev_event_array, dimensions*numEntries*sizeof(fptype)); 
   MEMCPY(dev_event_array, host_array, dimensions*numEntries*sizeof(fptype), cudaMemcpyHostToDevice);
-  MEMCPY_TO_SYMBOL(functorConstants, &numEvents, sizeof(fptype), 0, cudaMemcpyHostToDevice); 
+  MEMCPY_TO_SYMBOL(functorConstants, &numEvents, sizeof(float), 0, cudaMemcpyHostToDevice); 
   delete[] host_array; 
 }
 
@@ -183,7 +183,7 @@ __host__ void PdfBase::setData (UnbinnedDataSet* data) {
 
   gooMalloc((void**) &dev_event_array, dimensions*numEntries*sizeof(fptype)); 
   MEMCPY(dev_event_array, host_array, dimensions*numEntries*sizeof(fptype), cudaMemcpyHostToDevice);
-  MEMCPY_TO_SYMBOL(functorConstants, &numEvents, sizeof(fptype), 0, cudaMemcpyHostToDevice); 
+  MEMCPY_TO_SYMBOL(functorConstants, &numEvents, sizeof(float), 0, cudaMemcpyHostToDevice); 
   delete[] host_array; 
 }
 
@@ -213,7 +213,7 @@ __host__ void PdfBase::setData (BinnedDataSet* data) {
 
   gooMalloc((void**) &dev_event_array, dimensions*numEntries*sizeof(fptype)); 
   MEMCPY(dev_event_array, host_array, dimensions*numEntries*sizeof(fptype), cudaMemcpyHostToDevice);
-  MEMCPY_TO_SYMBOL(functorConstants, &numEvents, sizeof(fptype), 0, cudaMemcpyHostToDevice); 
+  MEMCPY_TO_SYMBOL(functorConstants, &numEvents, sizeof(float), 0, cudaMemcpyHostToDevice); 
   delete[] host_array; 
 }
 

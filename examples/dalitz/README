@@ -11,3 +11,12 @@ dalitz dalitz_toyMC_000.txt
 The output should be a Dalitz plot stored in the file datatzplot.png, 
 and a MINUIT fit log, the fit parameters being the real and imaginary
 parts of the amplitudes of the resonances. 
+
+################################################
+DEMO code for the D+ -> KKK MIPAW analysis
+To build the code, do
+
+make dalitz_D3K_sig
+./dalitz_D3K_sig FastMC_sigtoy_0.root
+
+This executable is able to test the signal fit model by running the fit over 1M signal toy MC events saved in "FastMC_sigtoy_0.root". 
