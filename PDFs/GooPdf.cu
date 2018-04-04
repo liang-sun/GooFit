@@ -4,6 +4,9 @@
 #include "thrust/iterator/constant_iterator.h" 
 #include <fstream> 
 
+fptype host_ROUGHNESS = 1.;
+const fptype host_alpha = 0;
+
 // These variables are either function-pointer related (thus specific to this implementation)
 // or constrained to be in the CUDAglob translation unit by nvcc limitations; otherwise they 
 // would be in PdfBase. 
@@ -11,7 +14,7 @@
 // Device-side, translation-unit constrained. 
 MEM_CONSTANT fptype cudaArray[maxParams];           // Holds device-side fit parameters. 
 MEM_CONSTANT unsigned int paramIndices[maxParams];  // Holds functor-specific indices into cudaArray. Also overloaded to hold integer constants (ie parameters that cannot vary.) 
-MEM_CONSTANT fptype functorConstants[maxParams];    // Holds non-integer constants. Notice that first entry is number of events. 
+MEM_CONSTANT float functorConstants[maxParams];    // Holds non-integer constants. Notice that first entry is number of events. 
 MEM_CONSTANT fptype normalisationFactors[maxParams]; 
 
 // For debugging 
@@ -221,7 +224,7 @@ __host__ double GooPdf::sumOfNll (int numVars) const {
 				  *logger, dummy, cudaPlus);   
 }
 
-__host__ double GooPdf::calculateNLL () const {
+__host__ double GooPdf::calculateNLL () {
   //if (cpuDebug & 1) std::cout << getName() << " entering calculateNLL (" << host_callnumber << ")" << std::endl; 
 
   //MEMCPY_TO_SYMBOL(callnumber, &host_callnumber, sizeof(int)); 
@@ -251,7 +254,8 @@ __host__ double GooPdf::calculateNLL () const {
     numVars *= -1; 
   }
 
-  fptype ret = sumOfNll(numVars); 
+  fptype ret = sumOfNll(numVars); // - \Sum LOG(L)
+//  ret += host_alpha*log(host_ROUGHNESS); // Roughness penalty
   if (0 == ret) abortWithCudaPrintFlush(__FILE__, __LINE__, getName() + " zero NLL", this); 
   //if (cpuDebug & 1) std::cout << "Full NLL " << host_callnumber << " : " << 2*ret << std::endl;
   //setDebugMask(0); 
@@ -369,7 +373,7 @@ __host__ fptype GooPdf::getValue () {
   return results[0];
 }
 
-__host__ fptype GooPdf::normalise () const {
+__host__ fptype GooPdf::normalise () {
   //if (cpuDebug & 1) std::cout << "Normalising " << getName() << " " << hasAnalyticIntegral() << " " << normRanges << std::endl;
 
   if (!fitControl->metricIsPdf()) {
